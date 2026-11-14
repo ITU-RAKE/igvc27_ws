@@ -1,0 +1,336 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+    <!-- ===================== SABITLER ===================== -->
+    <xacro:property name="PI" value="3.14159265359"/>
+
+    <!-- Govde (kesik piramit). Mesh (chassis.stl) bu degerlerden otomatik uretilir:
+         build sirasinda ve launch basinda scripts/generate_chassis_mesh.py ile -->
+    <xacro:property name="chassis_bottom_length" value="0.95"/>
+    <xacro:property name="chassis_bottom_width"  value="0.65"/>
+    <xacro:property name="chassis_top_length"    value="0.85"/>
+    <xacro:property name="chassis_top_width"     value="0.60"/>
+    <xacro:property name="chassis_height"        value="0.30"/>
+    <xacro:property name="chassis_mass"          value="25.0"/>
+    <xacro:property name="ground_clearance"      value="0.10"/>  <!-- taban ile zemin arasi -->
+
+    <!-- Ceker tekerlekler -->
+    <xacro:property name="wheel_radius"     value="0.10"/>
+    <xacro:property name="wheel_width"      value="0.06"/>
+    <xacro:property name="wheel_mass"       value="1.5"/>
+    <xacro:property name="wheel_x_offset"   value="0.0"/>    <!-- govde merkezine gore -->
+    <xacro:property name="wheel_gap"        value="0.01"/>   <!-- govdenin en genis dis yuzeyi ile tekerlek ic yuzeyi arasi -->
+    <!-- Tekerlek merkezleri arasi: govdenin en genis yeri + her iki yanda bosluk + tekerlek genisligi -->
+    <xacro:property name="wheel_separation"
+                    value="${max(chassis_bottom_width, chassis_top_width) + 2*wheel_gap + wheel_width}"/>
+    <xacro:property name="max_effort"       value="50.0"/>
+    <xacro:property name="max_velocity"     value="20.0"/>
+    <!-- Simulasyon motor modeli (gazebo_ros2_control velocity_pid): tork = kp * hiz hatasi, 1 kHz.
+         kp: tekerlek ataleti kucuk (~0.0075 kg m^2); kp*dt/I > ~2 olunca ayrik PID salinir (kp 50
+         kararsiz), kp 10 kararli ve takip iyi.
+         ki = 0: integral, viraj sirasinda biriktirdigi torku sifir komutta da uygulamaya devam eder;
+         arac kp/ki saniye boyunca yavasca donmeye devam ederdi. -->
+    <xacro:property name="wheel_pid_kp"     value="10.0"/>   <!-- N m / (rad/s) -->
+    <xacro:property name="wheel_pid_ki"     value="0.0"/>
+
+    <!-- Caster tekerlekler -->
+    <!-- Kure capi = ground_clearance: hem govde tabanina hem zemine deger -->
+    <xacro:property name="caster_radius"   value="${ground_clearance/2}"/>
+    <xacro:property name="caster_mass"     value="0.3"/>
+    <xacro:property name="caster_x_offset" value="${chassis_bottom_length/2 - 0.08}"/>
+
+    <!-- Kameralar (konumlar govde merkezine gore, yukseklik zeminden) -->
+    <xacro:property name="camera_height"   value="1.00"/>   <!-- optik merkez, zeminden -->
+    <xacro:property name="camera_x_offset" value="0.325"/>  <!-- on/arka kamera, merkezden -->
+    <xacro:property name="camera_y_offset" value="0.20"/>   <!-- sol/sag kamera, merkezden -->
+    <xacro:property name="camera_pitch"    value="${radians(43)}"/>  <!-- + = asagi bakar -->
+    <xacro:property name="camera_roll"     value="0.0"/>
+    <xacro:property name="camera_yaw"      value="0.0"/>    <!-- her kameranin kendi yonune eklenir -->
+    <!-- FOV: Gazebo (pinhole, kare piksel) yalnizca yatay FOV alir; dikey FOV
+         en-boy oranindan cikar: vfov = 2*atan(tan(hfov/2) * h / w).
+         98x75 icin oran ~1.5 (3:2) gerekir -> yukseklik genislikten hesaplanir (1280x854). -->
+    <xacro:property name="camera_hfov"     value="${radians(98)}"/>  <!-- yatay FOV -->
+    <xacro:property name="camera_vfov"     value="${radians(75)}"/>  <!-- dikey FOV -->
+    <xacro:property name="camera_img_w"    value="1280"/>
+    <xacro:property name="camera_img_h"
+                    value="${int(round(camera_img_w*tan(camera_vfov/2)/tan(camera_hfov/2)))}"/>
+    <xacro:property name="camera_rate"     value="30"/>
+    <xacro:property name="camera_mass"     value="0.1"/>
+    <xacro:property name="camera_body_x"   value="0.025"/>  <!-- kamera kutusu (gorsel) -->
+    <xacro:property name="camera_body_y"   value="0.09"/>
+    <xacro:property name="camera_body_z"   value="0.025"/>
+
+    <!-- Kamera diregi: govde ustunden yukselen iki direk + tepede arti seklinde iki profil -->
+    <xacro:property name="mast_profile"    value="0.02"/>   <!-- 20x20 profil -->
+    <xacro:property name="mast_pole_x"     value="${camera_x_offset - 0.05}"/>  <!-- direkler y=0, x=+-bu (uzunluk ekseni) -->
+    <xacro:property name="mast_bar_gap"    value="0.03"/>   <!-- profil ust yuzeyi ile optik merkez arasi -->
+    <xacro:property name="mast_mass"       value="0.8"/>
+    <!-- Govde ustunden profil alt yuzeyine kadar direk boyu -->
+    <xacro:property name="mast_pole_len"
+                    value="${camera_height - mast_bar_gap - mast_profile - ground_clearance - chassis_height}"/>
+
+    <!-- 2D lidarlar: govde tavaninda, on diregin onunde / arka diregin arkasinda -->
+    <xacro:property name="lidar_radius"    value="0.035"/>  <!-- govde silindiri (gorsel) -->
+    <xacro:property name="lidar_length"    value="0.04"/>
+    <xacro:property name="lidar_mass"      value="0.17"/>
+    <xacro:property name="lidar_gap"       value="0.03"/>   <!-- direk yuzeyi ile lidar govdesi arasi -->
+    <xacro:property name="lidar_x_offset"
+                    value="${mast_pole_x + mast_profile/2 + lidar_gap + lidar_radius}"/>  <!-- merkezden -->
+    <xacro:property name="lidar_fov"       value="${radians(280)}"/>  <!-- kendi onunde +-140 deg -->
+    <xacro:property name="lidar_min_range" value="0.12"/>
+    <xacro:property name="lidar_max_range" value="6.0"/>
+    <!-- RPLIDAR S3: 32 kHz ornekleme, tarama 10-20 Hz (10 Hz'de 0.1125 deg, 20 Hz'de 0.225 deg).
+         Frekans artinca tur basina nokta azalir; nokta sayisi buna gore hesaplanir. -->
+    <xacro:property name="lidar_sample_rate" value="32000"/>  <!-- Hz, donanim sabiti -->
+    <xacro:property name="lidar_rate"        value="20"/>     <!-- Hz, S3 icin en fazla 20 -->
+    <xacro:property name="lidar_samples"
+                    value="${int(round(lidar_sample_rate / lidar_rate * lidar_fov / (2*PI))) + 1}"/>
+
+    <!-- ===================== INERTIAL MAKROLARI ===================== -->
+    <xacro:macro name="box_inertial" params="mass x y z *origin">
+        <inertial>
+            <xacro:insert_block name="origin"/>
+            <mass value="${mass}"/>
+            <inertia ixx="${mass*(y*y + z*z)/12}" ixy="0" ixz="0"
+                     iyy="${mass*(x*x + z*z)/12}" iyz="0"
+                     izz="${mass*(x*x + y*y)/12}"/>
+        </inertial>
+    </xacro:macro>
+
+    <!-- Silindir ekseni yerel z -->
+    <xacro:macro name="cylinder_inertial" params="mass radius length *origin">
+        <inertial>
+            <xacro:insert_block name="origin"/>
+            <mass value="${mass}"/>
+            <inertia ixx="${mass*(3*radius*radius + length*length)/12}" ixy="0" ixz="0"
+                     iyy="${mass*(3*radius*radius + length*length)/12}" iyz="0"
+                     izz="${mass*radius*radius/2}"/>
+        </inertial>
+    </xacro:macro>
+
+    <xacro:macro name="sphere_inertial" params="mass radius *origin">
+        <inertial>
+            <xacro:insert_block name="origin"/>
+            <mass value="${mass}"/>
+            <inertia ixx="${2*mass*radius*radius/5}" ixy="0" ixz="0"
+                     iyy="${2*mass*radius*radius/5}" iyz="0"
+                     izz="${2*mass*radius*radius/5}"/>
+        </inertial>
+    </xacro:macro>
+
+    <!-- ===================== PARCA MAKROLARI ===================== -->
+    <!-- side: left / right, reflect: 1 (sol, +y) / -1 (sag, -y) -->
+    <xacro:macro name="drive_wheel" params="side reflect">
+        <link name="${side}_wheel">
+            <visual>
+                <origin xyz="0 0 0" rpy="${PI/2} 0 0"/>
+                <geometry><cylinder radius="${wheel_radius}" length="${wheel_width}"/></geometry>
+                <material name="black"/>
+            </visual>
+            <collision>
+                <origin xyz="0 0 0" rpy="${PI/2} 0 0"/>
+                <geometry><cylinder radius="${wheel_radius}" length="${wheel_width}"/></geometry>
+            </collision>
+            <xacro:cylinder_inertial mass="${wheel_mass}" radius="${wheel_radius}" length="${wheel_width}">
+                <origin xyz="0 0 0" rpy="${PI/2} 0 0"/>
+            </xacro:cylinder_inertial>
+        </link>
+
+        <joint name="${side}_wheel_joint" type="continuous">
+            <parent link="base_link"/>
+            <child link="${side}_wheel"/>
+            <!-- base_link zaten aks merkezi: tekerlek x=0 (wheel_x_offset govdeyi kaydirir) -->
+            <origin xyz="0 ${reflect*wheel_separation/2} 0" rpy="0 0 0"/>
+            <axis xyz="0 1 0"/>
+            <limit effort="${max_effort}" velocity="${max_velocity}"/>
+            <dynamics damping="0.1" friction="0.1"/>
+        </joint>
+    </xacro:macro>
+
+    <!-- position: front / rear, reflect: 1 (on) / -1 (arka) -->
+    <xacro:macro name="caster_wheel" params="position reflect">
+        <link name="${position}_caster">
+            <visual>
+                <geometry><sphere radius="${caster_radius}"/></geometry>
+                <material name="grey"/>
+            </visual>
+            <collision>
+                <geometry><sphere radius="${caster_radius}"/></geometry>
+            </collision>
+            <xacro:sphere_inertial mass="${caster_mass}" radius="${caster_radius}">
+                <origin xyz="0 0 0" rpy="0 0 0"/>
+            </xacro:sphere_inertial>
+        </link>
+
+        <!-- base_link tekerlek aksi yuksekliginde; caster zemine degecek sekilde asagi indirilir -->
+        <joint name="${position}_caster_joint" type="fixed">
+            <parent link="base_link"/>
+            <child link="${position}_caster"/>
+            <!-- caster_x_offset govde merkezine gore; govde merkezi base_link'te x=-wheel_x_offset -->
+            <origin xyz="${-wheel_x_offset + reflect*caster_x_offset} 0 ${caster_radius - wheel_radius}" rpy="0 0 0"/>
+        </joint>
+    </xacro:macro>
+
+    <!-- Kamera diregi. Link orijini govde ust yuzeyinin merkezi -->
+    <xacro:macro name="mast_box" params="x y z sx sy sz">
+        <visual>
+            <origin xyz="${x} ${y} ${z}" rpy="0 0 0"/>
+            <geometry><box size="${sx} ${sy} ${sz}"/></geometry>
+            <material name="grey"/>
+        </visual>
+        <collision>
+            <origin xyz="${x} ${y} ${z}" rpy="0 0 0"/>
+            <geometry><box size="${sx} ${sy} ${sz}"/></geometry>
+        </collision>
+    </xacro:macro>
+
+    <xacro:macro name="camera_mast">
+        <xacro:property name="bar_z" value="${mast_pole_len + mast_profile/2}"/>
+        <link name="camera_mast">
+            <!-- Direkler -->
+            <xacro:mast_box x="${mast_pole_x}" y="0" z="${mast_pole_len/2}"
+                            sx="${mast_profile}" sy="${mast_profile}" sz="${mast_pole_len}"/>
+            <xacro:mast_box x="${-mast_pole_x}" y="0" z="${mast_pole_len/2}"
+                            sx="${mast_profile}" sy="${mast_profile}" sz="${mast_pole_len}"/>
+            <!-- Tepe profilleri: on-arka ve sol-sag -->
+            <xacro:mast_box x="0" y="0" z="${bar_z}"
+                            sx="${2*camera_x_offset}" sy="${mast_profile}" sz="${mast_profile}"/>
+            <xacro:mast_box x="0" y="0" z="${bar_z}"
+                            sx="${mast_profile}" sy="${2*camera_y_offset}" sz="${mast_profile}"/>
+            <xacro:box_inertial mass="${mast_mass}" x="${2*camera_x_offset}" y="${2*camera_y_offset}"
+                                z="${mast_pole_len}">
+                <origin xyz="0 0 ${mast_pole_len/2}" rpy="0 0 0"/>
+            </xacro:box_inertial>
+        </link>
+
+        <joint name="camera_mast_joint" type="fixed">
+            <parent link="chassis"/>
+            <child link="camera_mast"/>
+            <origin xyz="0 0 ${chassis_height}" rpy="0 0 0"/>
+        </joint>
+    </xacro:macro>
+
+    <!-- name: front/rear/left/right, x/y: govde merkezine gore, yaw: bakis yonu
+         Topic: /<name>_camera/image_raw, /<name>_camera/camera_info -->
+    <xacro:macro name="camera" params="name x y yaw">
+        <!-- <name>_camera_link: optik merkez, x ileri (Gazebo sensor bu linkte) -->
+        <link name="${name}_camera_link">
+            <visual>
+                <origin xyz="${-camera_body_x/2} 0 0" rpy="0 0 0"/>
+                <geometry><box size="${camera_body_x} ${camera_body_y} ${camera_body_z}"/></geometry>
+                <material name="black"/>
+            </visual>
+            <collision>
+                <origin xyz="${-camera_body_x/2} 0 0" rpy="0 0 0"/>
+                <geometry><box size="${camera_body_x} ${camera_body_y} ${camera_body_z}"/></geometry>
+            </collision>
+            <xacro:box_inertial mass="${camera_mass}" x="${camera_body_x}" y="${camera_body_y}" z="${camera_body_z}">
+                <origin xyz="${-camera_body_x/2} 0 0" rpy="0 0 0"/>
+            </xacro:box_inertial>
+        </link>
+
+        <joint name="${name}_camera_joint" type="fixed">
+            <parent link="chassis"/>
+            <child link="${name}_camera_link"/>
+            <origin xyz="${x} ${y} ${camera_height - ground_clearance}"
+                    rpy="${camera_roll} ${camera_pitch} ${yaw + camera_yaw}"/>
+        </joint>
+
+        <!-- ROS optik cerceve: z ileri, x saga, y asagi -->
+        <link name="${name}_camera_optical_frame"/>
+        <joint name="${name}_camera_optical_joint" type="fixed">
+            <parent link="${name}_camera_link"/>
+            <child link="${name}_camera_optical_frame"/>
+            <origin xyz="0 0 0" rpy="${-PI/2} 0 ${-PI/2}"/>
+        </joint>
+
+        <gazebo reference="${name}_camera_link">
+            <material>Gazebo/Black</material>
+            <sensor type="camera" name="${name}_camera">
+                <always_on>true</always_on>
+                <update_rate>${camera_rate}</update_rate>
+                <visualize>false</visualize>
+                <camera>
+                    <horizontal_fov>${camera_hfov}</horizontal_fov>
+                    <image>
+                        <width>${camera_img_w}</width>
+                        <height>${camera_img_h}</height>
+                        <format>R8G8B8</format>
+                    </image>
+                    <clip><near>0.05</near><far>50.0</far></clip>
+                    <noise>
+                        <type>gaussian</type>
+                        <mean>0.0</mean>
+                        <stddev>0.007</stddev>
+                    </noise>
+                </camera>
+                <plugin name="${name}_camera_plugin" filename="libgazebo_ros_camera.so">
+                    <ros><namespace>/</namespace></ros>
+                    <camera_name>${name}_camera</camera_name>
+                    <frame_name>${name}_camera_optical_frame</frame_name>
+                </plugin>
+            </sensor>
+        </gazebo>
+    </xacro:macro>
+
+    <!-- name: front/rear, x: govde merkezine gore, yaw: bakis yonu, topic: LaserScan topic'i
+         Link orijini tarama duzlemi (govde silindirinin merkezi), x ileri -->
+    <xacro:macro name="lidar" params="name x yaw topic">
+        <link name="${name}_lidar_link">
+            <visual>
+                <geometry><cylinder radius="${lidar_radius}" length="${lidar_length}"/></geometry>
+                <material name="black"/>
+            </visual>
+            <collision>
+                <geometry><cylinder radius="${lidar_radius}" length="${lidar_length}"/></geometry>
+            </collision>
+            <xacro:cylinder_inertial mass="${lidar_mass}" radius="${lidar_radius}" length="${lidar_length}">
+                <origin xyz="0 0 0" rpy="0 0 0"/>
+            </xacro:cylinder_inertial>
+        </link>
+
+        <joint name="${name}_lidar_joint" type="fixed">
+            <parent link="chassis"/>
+            <child link="${name}_lidar_link"/>
+            <origin xyz="${x} 0 ${chassis_height + lidar_length/2}" rpy="0 0 ${yaw}"/>
+        </joint>
+
+        <gazebo reference="${name}_lidar_link">
+            <material>Gazebo/Black</material>
+            <sensor type="ray" name="${name}_lidar">
+                <always_on>true</always_on>
+                <update_rate>${lidar_rate}</update_rate>
+                <visualize>true</visualize>
+                <ray>
+                    <scan>
+                        <horizontal>
+                            <samples>${lidar_samples}</samples>
+                            <resolution>1</resolution>
+                            <min_angle>${-lidar_fov/2}</min_angle>
+                            <max_angle>${lidar_fov/2}</max_angle>
+                        </horizontal>
+                    </scan>
+                    <range>
+                        <min>${lidar_min_range}</min>
+                        <max>${lidar_max_range}</max>
+                        <resolution>0.01</resolution>
+                    </range>
+                    <noise>
+                        <type>gaussian</type>
+                        <mean>0.0</mean>
+                        <stddev>0.01</stddev>
+                    </noise>
+                </ray>
+                <plugin name="${name}_lidar_plugin" filename="libgazebo_ros_ray_sensor.so">
+                    <ros>
+                        <namespace>/</namespace>
+                        <remapping>~/out:=${topic}</remapping>
+                    </ros>
+                    <output_type>sensor_msgs/LaserScan</output_type>
+                    <frame_name>${name}_lidar_link</frame_name>
+                </plugin>
+            </sensor>
+        </gazebo>
+    </xacro:macro>
+
+</robot>

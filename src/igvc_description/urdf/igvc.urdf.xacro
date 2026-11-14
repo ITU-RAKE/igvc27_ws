@@ -1,0 +1,74 @@
+<?xml version="1.0"?>
+<robot name="igvc" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+    <xacro:include filename="$(find igvc_description)/urdf/igvc_macros.xacro"/>
+    <xacro:include filename="$(find igvc_description)/urdf/igvc_gazebo.xacro"/>
+
+    <material name="dark_grey"><color rgba="0.25 0.25 0.28 1.0"/></material>
+    <material name="grey"><color rgba="0.6 0.6 0.6 1.0"/></material>
+    <material name="black"><color rgba="0.05 0.05 0.05 1.0"/></material>
+
+    <!-- Zemin izdusumu -->
+    <link name="base_footprint"/>
+
+    <!-- base_link: iki ceker tekerlegin aks merkezi (diff drive icin standart) -->
+    <link name="base_link"/>
+
+    <joint name="base_joint" type="fixed">
+        <parent link="base_footprint"/>
+        <child link="base_link"/>
+        <origin xyz="0 0 ${wheel_radius}" rpy="0 0 0"/>
+    </joint>
+
+    <!-- Govde: kesik piramit. Link orijini taban yuzeyinin merkezi -->
+    <link name="chassis">
+        <visual>
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+            <geometry>
+                <mesh filename="package://igvc_description/meshes/chassis.stl"/>
+            </geometry>
+            <material name="dark_grey"/>
+        </visual>
+        <collision>
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+            <geometry>
+                <mesh filename="package://igvc_description/meshes/chassis.stl"/>
+            </geometry>
+        </collision>
+        <!-- Ataleti ortalama olculu kutu ile yaklasiyoruz -->
+        <xacro:box_inertial mass="${chassis_mass}"
+                            x="${(chassis_bottom_length + chassis_top_length)/2}"
+                            y="${(chassis_bottom_width + chassis_top_width)/2}"
+                            z="${chassis_height}">
+            <origin xyz="0 0 ${chassis_height/2}" rpy="0 0 0"/>
+        </xacro:box_inertial>
+    </link>
+
+    <joint name="chassis_joint" type="fixed">
+        <parent link="base_link"/>
+        <child link="chassis"/>
+        <origin xyz="${-wheel_x_offset} 0 ${ground_clearance - wheel_radius}" rpy="0 0 0"/>
+    </joint>
+
+    <!-- Ceker tekerlekler -->
+    <xacro:drive_wheel side="left"  reflect="1"/>
+    <xacro:drive_wheel side="right" reflect="-1"/>
+
+    <!-- Caster tekerlekler -->
+    <xacro:caster_wheel position="front" reflect="1"/>
+    <xacro:caster_wheel position="rear"  reflect="-1"/>
+
+    <!-- Kamera diregi ve 4 kamera (43 deg asagi bakar) -->
+    <xacro:camera_mast/>
+    <xacro:camera name="front" x="${camera_x_offset}"  y="0"                  yaw="0"/>
+    <xacro:camera name="rear"  x="${-camera_x_offset}" y="0"                  yaw="${PI}"/>
+    <xacro:camera name="left"  x="0"                   y="${camera_y_offset}"  yaw="${PI/2}"/>
+    <xacro:camera name="right" x="0"                   y="${-camera_y_offset}" yaw="${-PI/2}"/>
+
+    <!-- 2D lidarlar: her biri kendi onundeki 280 deg -->
+    <xacro:lidar name="front" x="${lidar_x_offset}"  yaw="0"     topic="scan_front"/>
+    <xacro:lidar name="rear"  x="${-lidar_x_offset}" yaw="${PI}" topic="scan_rear"/>
+
+    <!-- Diger sensorler buraya eklenecek -->
+
+</robot>

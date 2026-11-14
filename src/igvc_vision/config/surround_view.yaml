@@ -1,0 +1,45 @@
+surround_view_node:
+  ros__parameters:
+    # NOT: Geometri (image_width/height, <kamera>.pose, <kamera>.intrinsics, vehicle.*,
+    # frame_id) surround_view.launch.py tarafindan igvc_macros.xacro'dan hesaplanip bu
+    # dosyanin uzerine yazilir. Burada yalnizca geometri disi ayarlar var.
+    rate_hz: 20.0
+
+    # BEV: 10 m x 10 m, 2 cm/px -> 500x500, base_footprint merkezde
+    bev_size_m: 10.0
+    bev_resolution_m: 0.02
+    max_range_m: 4.9          # dairesel çıktının yarıçapı
+    seam_angle_deg: 45.0      # dikiş çizgisinin X ekseninden açısı (simetrik çapraz)
+    fill_from_neighbor: true  # sahibi görmüyorsa komşu kameradan doldur
+    use_vehicle_model: true   # true: kesik piramit govde + tekerlekler (xacro). false: body_box_m
+    body_box_m: [0.465, 0.325, 0.34]   # use_vehicle_model=false ise: yarı uzunluk, yarı genişlik, yükseklik
+
+    draw_vehicle: true
+    draw_seams: false
+    draw_range_circle: true
+    jpeg_quality: 85
+    # Sikistirilmamis (sensor_msgs/Image) kopyalar: RViz "Image" paneli yalnizca bunlari listeler.
+    # Yalnizca abone varken uretilir.
+    publish_raw_homo: true     # igvc_vision/merged_image_homo (bgr8, 500x500)
+    publish_raw_merged: true   # igvc_vision/merged_image (bgr8, 4 ham goruntu mozaigi)
+    merged_raw_scale: 0.4      # ham mozaik olcegi (tam boy 2988x2988 ~27 MB/kare)
+    # rqt/RViz'de /compressed yerine bu ham topic'leri sec: rqt_image_view acilista
+    # kayitli '/compressed' secimini bazen ham topic sanip tip hatasiyla cokuyor.
+
+    merged_topic: igvc_vision/merged_image
+    homo_topic: igvc_vision/merged_image_homo
+
+    # Kamera topic'leri ve distorsiyon (simulasyonda sifir; gercek kamerada kalibrasyondan)
+    # dist_coeffs: [k1, k2, p1, p2, k3]
+    front:
+      topic: /front_camera/image_raw/compressed
+      dist_coeffs: [0.0, 0.0, 0.0, 0.0, 0.0]
+    back:
+      topic: /rear_camera/image_raw/compressed
+      dist_coeffs: [0.0, 0.0, 0.0, 0.0, 0.0]
+    left:
+      topic: /left_camera/image_raw/compressed
+      dist_coeffs: [0.0, 0.0, 0.0, 0.0, 0.0]
+    right:
+      topic: /right_camera/image_raw/compressed
+      dist_coeffs: [0.0, 0.0, 0.0, 0.0, 0.0]

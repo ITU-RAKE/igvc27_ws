@@ -1,0 +1,24 @@
+# Simulasyon "motor surucusu" (gazebo_ros2_control). Tekerlek hiz komutlari ve enkoder okumasi.
+# cmd_vel -> tekerlek hizi donusumu ve odometri: igvc_controller/controller.py
+controller_manager:
+  ros__parameters:
+    # Fizik adimiyla ayni (1 ms): velocity_pid torku SetForce ile uygulanir ve Gazebo kuvvetleri her
+    # adimda sifirlar. 100 Hz'de tork 10 adimdan yalnizca birinde etkili olur -> tekerlek tutulamaz,
+    # yuksek kazancta kararsiz. 1000 Hz'de her adimda uygulanir.
+    update_rate: 1000  # Hz
+    use_sim_time: true
+
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+    wheel_velocity_controller:
+      type: velocity_controllers/JointGroupVelocityController
+
+wheel_velocity_controller:
+  ros__parameters:
+    # Komut sirasi: /wheel_velocity_controller/commands [sol, sag] (rad/s)
+    joints:
+      - left_wheel_joint
+      - right_wheel_joint
+    # URDF'te velocity_pid: Gazebo hizi PID ile TORK olarak uygular (gercek motor gibi, sifir komutta
+    # tekerlegi tutar). ros2_control'e '<joint>/velocity' olarak acildigi icin bu kontrolcu calisir.

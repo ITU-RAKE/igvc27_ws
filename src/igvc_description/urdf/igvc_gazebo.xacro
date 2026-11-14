@@ -1,0 +1,88 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+    <!-- ===================== MATERYAL / SURTUNME ===================== -->
+    <gazebo reference="chassis">
+        <material>Gazebo/DarkGrey</material>
+    </gazebo>
+
+    <gazebo reference="left_wheel">
+        <material>Gazebo/Black</material>
+        <mu1>1.0</mu1>
+        <mu2>1.0</mu2>
+        <kp>1000000.0</kp>
+        <kd>100.0</kd>
+        <minDepth>0.001</minDepth>
+    </gazebo>
+
+    <gazebo reference="right_wheel">
+        <material>Gazebo/Black</material>
+        <mu1>1.0</mu1>
+        <mu2>1.0</mu2>
+        <kp>1000000.0</kp>
+        <kd>100.0</kd>
+        <minDepth>0.001</minDepth>
+    </gazebo>
+
+    <!-- Caster'lar surtunmesiz kure: serbestce kayar. Temas sertligi (kp/kd) tekerleklerle AYNI
+         olmali: aksi halde ODE varsayilani cok sert, duz zeminde agirligin tamami caster'lara
+         biner, ceker tekerleklerde normal kuvvet (= cekis) kalmaz ve arac hic ilerlemez. -->
+    <gazebo reference="front_caster">
+        <material>Gazebo/Grey</material>
+        <mu1>0.0</mu1>
+        <mu2>0.0</mu2>
+        <kp>1000000.0</kp>
+        <kd>100.0</kd>
+        <minDepth>0.001</minDepth>
+    </gazebo>
+
+    <gazebo reference="rear_caster">
+        <material>Gazebo/Grey</material>
+        <mu1>0.0</mu1>
+        <mu2>0.0</mu2>
+        <kp>1000000.0</kp>
+        <kd>100.0</kd>
+        <minDepth>0.001</minDepth>
+    </gazebo>
+
+    <!-- ===================== ros2_control (simulasyon motor surucusu) =====================
+         Tekerlekler hiz komutuyla surulur, konum/hiz (enkoder) okunur. cmd_vel -> tekerlek hizi ve
+         odometri igvc_controller/controller.py'de (skid steer). Odom/TF'i yalnizca o yayinlar;
+         eski diff_drive eklentisi kaldirildi (cakisma olmasin).
+         Kontrolculer: config/ros2_controllers.yaml (joint_state_broadcaster + wheel_velocity_controller) -->
+    <ros2_control name="GazeboSystem" type="system">
+        <hardware>
+            <plugin>gazebo_ros2_control/GazeboSystem</plugin>
+        </hardware>
+        <!-- velocity_pid: hiz PID ile TORK uygulanarak tutulur (gercek motor gibi). Duz 'velocity'
+             arayuzu her adimda SetVelocity yapar; bu bir kilit degildir, sifir komutta bile virajdan
+             kalan govde momentumu tekerlekleri dondurup araci yavasca dondurmeye devam ettirir. -->
+        <!-- Not: velocity_pid ros2_control'e yine '<joint>/velocity' olarak acilir (kontrolcu
+             'velocity' talep eder). PID kazanclari joint seviyesindeki 'vel_' onekli parametrelerden. -->
+        <xacro:macro name="wheel_interface" params="joint">
+            <joint name="${joint}">
+                <param name="vel_kp">${wheel_pid_kp}</param>
+                <param name="vel_ki">${wheel_pid_ki}</param>
+                <param name="vel_kd">0.0</param>
+                <param name="vel_max_integral_error">${max_effort}</param>
+                <param name="vel_min_integral_error">${-max_effort}</param>
+                <param name="vel_antiwindup">true</param>
+                <command_interface name="velocity_pid">
+                    <param name="min">${-max_velocity}</param>
+                    <param name="max">${max_velocity}</param>
+                </command_interface>
+                <state_interface name="position"/>
+                <state_interface name="velocity"/>
+            </joint>
+        </xacro:macro>
+        <xacro:wheel_interface joint="left_wheel_joint"/>
+        <xacro:wheel_interface joint="right_wheel_joint"/>
+    </ros2_control>
+
+    <gazebo>
+        <plugin name="gazebo_ros2_control" filename="libgazebo_ros2_control.so">
+            <parameters>$(find igvc_description)/config/ros2_controllers.yaml</parameters>
+        </plugin>
+    </gazebo>
+
+</robot>
