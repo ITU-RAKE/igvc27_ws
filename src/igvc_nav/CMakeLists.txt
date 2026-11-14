@@ -1,15 +1,14 @@
 cmake_minimum_required(VERSION 3.8)
-project(ika_nav)
+project(igvc_nav)
 
 find_package(ament_cmake REQUIRED)
 find_package(ament_cmake_python REQUIRED)
 
-# ika_nav/ python paketini kur (dugumler birbirinden import edebilsin diye)
+# igvc_nav/ python paketini kur (dugumler birbirinden import edebilsin diye)
 ament_python_install_package(${PROJECT_NAME})
 
-# Calistirilabilir dugumler: "<executable>:<modul>" -> ros2 run ika_nav <executable>
-# Entegre: path_planner, path_tracker. Digerleri (cone_detector, mission_planner) gecen seneki rake_core / rake_msgs / ika_utils / ika_actions paketlerine
-# bagli; entegre edildikce bu listeye eklenecek.
+# Calistirilabilir dugumler: "<executable>:<modul>" -> ros2 run igvc_nav <executable>
+# Yeni dugum eklerken bu listeye bir satir ekle.
 # lib/ altina modulu import eden kucuk bir baslatici kurulur; boylece
 # --symlink-install ile .py degisiklikleri yeniden build gerektirmez.
 set(PYTHON_NODES

@@ -1,4 +1,4 @@
-"""Otonom yerel surus: ros2 launch ika_nav local_nav.launch.py [with_maps:=true]
+"""Otonom yerel surus: ros2 launch igvc_nav local_nav.launch.py [with_maps:=true]
 
 path_planner (/fused_map -> /igvc_nav/planned_path) + path_tracker (-> /cmd_vel).
 with_maps:=true (varsayilan) igvc_vision harita zincirini de baslatir
@@ -17,7 +17,7 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
-    nav = os.path.join(get_package_share_directory('ika_nav'), 'launch')
+    nav = os.path.join(get_package_share_directory('igvc_nav'), 'launch')
     sim_time = LaunchConfiguration('use_sim_time')
     return LaunchDescription([
         DeclareLaunchArgument('with_maps', default_value='true',
@@ -29,7 +29,7 @@ def generate_launch_description():
             launch_arguments={'with_maps': LaunchConfiguration('with_maps'),
                               'use_sim_time': sim_time}.items()),
         Node(
-            package='ika_nav',
+            package='igvc_nav',
             executable='path_tracker',
             name='path_tracker',
             output='screen',

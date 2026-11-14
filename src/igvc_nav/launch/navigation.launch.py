@@ -8,8 +8,8 @@ from launch_ros.actions import SetRemap
 def generate_launch_description():
     nav2_bringup_dir = get_package_share_directory('nav2_bringup')
     
-    # HATA BURADAYDI: 'kendi_paket_adiniz' yerine 'ika_nav' yazıldı.
-    params_file = os.path.join(get_package_share_directory('ika_nav'), 'config', 'nav2_params.yaml')
+    # HATA BURADAYDI: 'kendi_paket_adiniz' yerine 'igvc_nav' yazıldı.
+    params_file = os.path.join(get_package_share_directory('igvc_nav'), 'config', 'nav2_params.yaml')
 
     return LaunchDescription([
         SetRemap(src='/cmd_vel', dst='/igvc_controllers/cmd_vel_unstamped'),

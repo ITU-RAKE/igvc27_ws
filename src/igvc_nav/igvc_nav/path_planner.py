@@ -45,7 +45,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CompressedImage, Image
 
-from ika_nav.costmap_utils import Costmap
+from igvc_nav.costmap_utils import Costmap
 
 MOTION_PRIMITIVES = [
     (1, 0),  # right
