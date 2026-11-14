@@ -1,15 +1,11 @@
+```text
 1. igvc_controller/launch/sim.launch.py
    ├── gzserver / gzclient            (gazebo_ros)
-   │    
-   ├── robot_state_publisher        
-   │     URDF'ten TF ağacı, robot_description yayını
+   ├── robot_state_publisher
    ├── spawn_entity.py                (gazebo_ros)
-   │     robotu Gazebo'ya yerleştirme
    ├── spawner ×2                     (controller_manager)
-   │    
-   ├── rviz2                          
-   │   
-   └── controller.py                  
+   ├── rviz2
+   └── controller.py
          skid steer kinematiği, cmd_vel→tekerlek, enkoder→odom, TF
 
 2. igvc_vision/launch/igvc_vision.launch.py
@@ -27,3 +23,4 @@
    │     hedef seçimi (BFS), maliyetli A*, geri çekilme
    └── path_tracker.py
          pure pursuit yol takibi, cmd_vel üretimi
+```
