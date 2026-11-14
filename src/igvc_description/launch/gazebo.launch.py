@@ -56,7 +56,7 @@ def generate_launch_description():
 
     xacro_file = os.path.join(pkg_share, 'urdf', 'igvc.urdf.xacro')
     default_world = os.path.join(pkg_share, 'worlds', 'empty.world')
-    rviz_config = os.path.join(pkg_share, 'rviz', 'display.rviz')
+    default_rviz = os.path.join(pkg_share, 'rviz', 'display.rviz')
 
     world = LaunchConfiguration('world')
     rviz = LaunchConfiguration('rviz')
@@ -97,7 +97,7 @@ def generate_launch_description():
     rviz_node = Node(
         package='rviz2',
         executable='rviz2',
-        arguments=['-d', rviz_config],
+        arguments=['-d', LaunchConfiguration('rviz_config')],
         parameters=[{'use_sim_time': True}],
         condition=IfCondition(rviz),
     )
@@ -106,6 +106,7 @@ def generate_launch_description():
         OpaqueFunction(function=sync_chassis_mesh),
         DeclareLaunchArgument('world', default_value=default_world),
         DeclareLaunchArgument('rviz', default_value='false'),
+        DeclareLaunchArgument('rviz_config', default_value=default_rviz),
         DeclareLaunchArgument('gui', default_value='true', description='Gazebo arayuzu (gzclient)'),
         DeclareLaunchArgument('x', default_value='0.0'),
         DeclareLaunchArgument('y', default_value='0.0'),
