@@ -1,0 +1,150 @@
+amcl:
+  ros__parameters:
+    use_sim_time: True
+    # EKF kullandığınız için AMCL (Lidar tabanlı lokalizasyon) kullanmayabilirsiniz, 
+    # ancak Nav2 bringup varsayılan olarak bekler.
+
+controller_server:
+  ros__parameters:
+    use_sim_time: True
+    controller_frequency: 10.0
+    min_x_velocity_threshold: 0.001
+    min_y_velocity_threshold: 0.5
+    min_theta_velocity_threshold: 0.001
+    controller_plugins: ["FollowPath"]
+    
+    FollowPath:
+      plugin: "nav2_mppi_controller::MPPIController"
+      time_steps: 35
+      model_dt: 0.10
+      batch_size: 1000
+      vx_std: 0.6          # İleri hız deneme esnekliği
+      vy_std: 0.0          # Diff-drive'da Y ekseni hızı olmaz
+      wz_std: 0.6          # Dönüş deneme esnekliği (vz_std değil)
+      vx_max: 1.5          # İstediğin maksimum hız
+      vx_min: 0.0          # Engel yoksa geri gitmeyi yasakla
+      wz_max: 1.5
+      iteration_count: 1
+      prune_distance: 1.7
+      transform_tolerance: 0.1
+      temperature: 0.2
+      gamma: 0.015
+      motion_model: "DiffDrive"
+      
+      # MPPI'A NE YAPMASI GEREKTİĞİNİ SÖYLEYEN BEYİN (CRITICS):
+      critics: ["ConstraintCritic", "CostCritic", "GoalCritic", "PathAlignCritic", "PathFollowCritic"]
+      ConstraintCritic:
+        cost_power: 1
+        cost_weight: 4.0   # Çarpışmayı engelle
+      CostCritic:
+        cost_power: 1
+        cost_weight: 3.81  # Tehlikeli bölgelerden uzak dur
+      GoalCritic:
+        cost_power: 1
+        cost_weight: 3.0   # Hedefe gitmeye istekli ol
+        threshold_to_consider: 1.4
+      PathAlignCritic:
+        cost_power: 1
+        cost_weight: 10.0  # A*'ın çizdiği rotaya şiddetle sadık kal (F1 çizgisi)
+        max_heuristic_dist: 1.5
+      PathFollowCritic:
+        cost_power: 1
+        cost_weight: 5.0
+        offset_from_furthest: 20
+
+planner_server:
+  ros__parameters:
+    use_sim_time: True
+    planner_plugins: ["GridBased"]
+    
+    GridBased:
+      plugin: "nav2_smac_planner/SmacPlannerHybrid" # Hibrit A* (Köşesiz, kinematik rota çizer)
+      downsample_costmap: false
+      tolerance: 0.5
+      minimum_turning_radius: 0.40 # Aracınızın mekanik dönüş yarıçapı
+      
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      update_frequency: 10.0
+      publish_frequency: 10.0
+      global_frame: odom
+      robot_base_frame: base_link
+      use_sim_time: True
+      rolling_window: true
+      width: 8
+      height: 8
+      resolution: 0.05
+      plugins: ["obstacle_layer", "inflation_layer"]
+      
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: True
+        observation_sources: scan
+        scan:
+          topic: /scan # Lidar topic adınız
+          max_obstacle_height: 2.0
+          clearing: True
+          marking: True
+          data_type: "LaserScan"
+          # 2. TEMİZLEME (RAYTRACING) AYARLARI:
+          obstacle_range: 2.5   # Lidar 2.5 metreye kadar olan engelleri haritaya "ÇİZER"
+          raytrace_range: 3.0   # Lidar 3.0 metreye kadar olan boşlukları haritadan "SİLER"
+          
+          # 3. EN ÖNEMLİ SATIR: Lidar boşluk gördüğünde 'inf' (Sonsuz) döndürüyorsa, 
+          # bunu yok sayma, o ışının geçtiği yerleri (eski engelleri) haritadan sil!
+          inf_is_valid: True
+          
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        inflation_radius: 1.0 # Duvarlardan uzak durması için şişirme
+        cost_scaling_factor: 3.0 # F1 hissiyatı için yumuşak geçiş katsayısı
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      update_frequency: 5.0
+      publish_frequency: 5.0
+      global_frame: odom # veya lokalizasyon odom üzerinden çalışıyorsa 'odom'
+      robot_base_frame: base_link
+      use_sim_time: True
+      footprint: "[[0.5, 0.6], [0.5, -0.6], [-0.5, -0.6], [-0.5, 0.6]]"
+      resolution: 0.05
+
+# EKLENECEK / GÜNCELLENECEK KISIM BURASI:
+      rolling_window: true 
+      width: 40
+      height: 40
+
+      plugins: ["obstacle_layer", "inflation_layer"]
+      
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: True
+        observation_sources: scan
+        scan:
+          topic: /scan 
+          max_obstacle_height: 2.0
+          clearing: True
+          marking: True
+          data_type: "LaserScan"
+          
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        inflation_radius: 1.0 
+        cost_scaling_factor: 3.0
+
+velocity_smoother:
+  ros__parameters:
+    use_sim_time: True
+    smoothing_frequency: 20.0
+    scale_velocities: False
+    feedback: "OPEN_LOOP"
+    max_velocity: [2.0, 0.0, 1.5]  # [x, y, theta] Maksimum hızlarınız
+    min_velocity: [-0.5, 0.0, -1.5]
+    max_accel: [1.2, 0.0, 1.5]     # Aracın F1 gibi ivmelenmesi için yüksek tuttuk
+    max_decel: [-1.2, 0.0, -1.5]
+    odom_topic: "odom"
+    odom_duration: 0.1
+    deadband_velocity: [0.0, 0.0, 0.0]
+    velocity_timeout: 1.0
