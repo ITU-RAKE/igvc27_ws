@@ -39,6 +39,8 @@ def launch_node(context):
             'wheel_separation': v['wheel_separation'],
             'max_wheel_velocity': v['max_velocity'],
             'use_sim_time': LaunchConfiguration('use_sim_time'),
+            # EKF (igvc_localization) calisiyorsa odom->base_footprint TF'ini o yayinlar
+            'publish_tf': LaunchConfiguration('publish_tf'),
         }],
     )]
 
@@ -47,5 +49,7 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('use_sim_time', default_value='true',
                               description='Simulasyon saati (gercek aracta false)'),
+        DeclareLaunchArgument('publish_tf', default_value='true',
+                              description='odom->base_footprint TF (EKF varsa false)'),
         OpaqueFunction(function=launch_node),
     ])

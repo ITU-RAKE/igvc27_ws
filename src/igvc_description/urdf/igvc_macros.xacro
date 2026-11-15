@@ -38,6 +38,13 @@
     <xacro:property name="caster_radius"   value="${ground_clearance/2}"/>
     <xacro:property name="caster_mass"     value="0.3"/>
     <xacro:property name="caster_x_offset" value="${chassis_bottom_length/2 - 0.08}"/>
+    <!-- Caster suspansiyonu (dikey kayar eklem + yay). Sabit caster'larla ortadan cekisli arac
+         rampa basinda iki caster ustunde kopru olur, cekis tekerlekleri havada kalir (high-centering).
+         Yay en fazla k * travel ~ 210 N tasir -> agirligin cogu her zaman cekis tekerleklerinde. -->
+    <xacro:property name="caster_spring_k"  value="3000.0"/>  <!-- N/m -->
+    <xacro:property name="caster_damping"   value="150.0"/>   <!-- N s/m -->
+    <xacro:property name="caster_travel"    value="0.07"/>    <!-- m, yukari (iceri) -->
+    <xacro:property name="caster_droop"     value="0.02"/>    <!-- m, asagi (tepe gecislerinde) -->
 
     <!-- Kameralar (konumlar govde merkezine gore, yukseklik zeminden) -->
     <xacro:property name="camera_height"   value="1.00"/>   <!-- optik merkez, zeminden -->
@@ -85,6 +92,27 @@
     <xacro:property name="lidar_rate"        value="20"/>     <!-- Hz, S3 icin en fazla 20 -->
     <xacro:property name="lidar_samples"
                     value="${int(round(lidar_sample_rate / lidar_rate * lidar_fov / (2*PI))) + 1}"/>
+
+
+    <!-- IMU (gercek aracta BNO085: mutlak yaw, REP-145 ENU). Govde icinde, konum govde merkezine gore -->
+    <xacro:property name="imu_x_offset"     value="0.0"/>
+    <xacro:property name="imu_y_offset"     value="0.0"/>
+    <xacro:property name="imu_height"       value="${ground_clearance + 0.05}"/>  <!-- zeminden -->
+    <xacro:property name="imu_rate"         value="100"/>    <!-- Hz -->
+    <xacro:property name="imu_gyro_std"     value="0.002"/>  <!-- rad/s, beyaz gurultu -->
+    <xacro:property name="imu_gyro_bias"    value="0.0005"/> <!-- rad/s, sabit sapma (std) -->
+    <xacro:property name="imu_accel_std"    value="0.02"/>   <!-- m/s^2 -->
+
+    <!-- GPS (gercek aracta RTK). Anten direk tepesinde, capraz profillerin ortasinda -->
+    <xacro:property name="gps_x_offset"     value="0.0"/>    <!-- govde merkezine gore -->
+    <xacro:property name="gps_y_offset"     value="0.0"/>
+    <xacro:property name="gps_body"         value="0.06"/>   <!-- anten kutusu kenari (gorsel) -->
+    <xacro:property name="gps_height"
+                    value="${camera_height - mast_bar_gap + gps_body/4}"/>  <!-- kutu (yukseklik gps_body/2) profil ustune oturur -->
+    <xacro:property name="gps_rate"         value="10"/>     <!-- Hz -->
+    <xacro:property name="gps_h_std"        value="0.02"/>   <!-- m, yatay (RTK fix) -->
+    <xacro:property name="gps_v_std"        value="0.05"/>   <!-- m, dikey -->
+    <xacro:property name="gps_vel_std"      value="0.02"/>   <!-- m/s -->
 
     <!-- ===================== INERTIAL MAKROLARI ===================== -->
     <xacro:macro name="box_inertial" params="mass x y z *origin">
@@ -162,13 +190,22 @@
             </xacro:sphere_inertial>
         </link>
 
-        <!-- base_link tekerlek aksi yuksekliginde; caster zemine degecek sekilde asagi indirilir -->
-        <joint name="${position}_caster_joint" type="fixed">
+        <!-- base_link tekerlek aksi yuksekliginde; caster zemine degecek sekilde asagi indirilir.
+             Yayli dikey eklem: 0 = duz zeminde temas, + = iceri (yukari) cekilme -->
+        <joint name="${position}_caster_joint" type="prismatic">
             <parent link="base_link"/>
             <child link="${position}_caster"/>
             <!-- caster_x_offset govde merkezine gore; govde merkezi base_link'te x=-wheel_x_offset -->
             <origin xyz="${-wheel_x_offset + reflect*caster_x_offset} 0 ${caster_radius - wheel_radius}" rpy="0 0 0"/>
+            <axis xyz="0 0 1"/>
+            <limit lower="${-caster_droop}" upper="${caster_travel}" effort="1000" velocity="5.0"/>
+            <dynamics damping="${caster_damping}" friction="0.0"/>
         </joint>
+        <gazebo reference="${position}_caster_joint">
+            <springStiffness>${caster_spring_k}</springStiffness>
+            <springReference>0.0</springReference>
+            <implicitSpringDamper>true</implicitSpringDamper>
+        </gazebo>
     </xacro:macro>
 
     <!-- Kamera diregi. Link orijini govde ust yuzeyinin merkezi -->
@@ -300,7 +337,8 @@
             <sensor type="ray" name="${name}_lidar">
                 <always_on>true</always_on>
                 <update_rate>${lidar_rate}</update_rate>
-                <visualize>true</visualize>
+                <!-- Gazebo arayuzunde isin cizimi kapali (gzclient'i yorar). RViz /lidar_map etkilenmez -->
+                <visualize>false</visualize>
                 <ray>
                     <scan>
                         <horizontal>
@@ -328,6 +366,106 @@
                     </ros>
                     <output_type>sensor_msgs/LaserScan</output_type>
                     <frame_name>${name}_lidar_link</frame_name>
+                </plugin>
+            </sensor>
+        </gazebo>
+    </xacro:macro>
+
+
+    <!-- IMU: imu_link (x ileri, y sol, z yukari). Topic: /imu/data (sensor_msgs/Imu).
+         Yon dunyaya gore MUTLAK (initial_orientation_as_reference=false): BNO085'in mutlak yaw'i gibi -->
+    <xacro:macro name="imu_noise" params="std bias">
+        <noise type="gaussian">
+            <mean>0.0</mean><stddev>${std}</stddev>
+            <bias_mean>0.0</bias_mean><bias_stddev>${bias}</bias_stddev>
+        </noise>
+    </xacro:macro>
+
+    <xacro:macro name="imu">
+        <link name="imu_link">
+            <visual>
+                <geometry><box size="0.03 0.03 0.01"/></geometry>
+                <material name="black"/>
+            </visual>
+            <xacro:box_inertial mass="0.01" x="0.03" y="0.03" z="0.01">
+                <origin xyz="0 0 0" rpy="0 0 0"/>
+            </xacro:box_inertial>
+        </link>
+        <joint name="imu_joint" type="fixed">
+            <parent link="chassis"/>
+            <child link="imu_link"/>
+            <origin xyz="${imu_x_offset} ${imu_y_offset} ${imu_height - ground_clearance}" rpy="0 0 0"/>
+        </joint>
+        <gazebo reference="imu_link">
+            <sensor name="imu_sensor" type="imu">
+                <always_on>true</always_on>
+                <update_rate>${imu_rate}</update_rate>
+                <imu>
+                    <angular_velocity>
+                        <x><xacro:imu_noise std="${imu_gyro_std}" bias="${imu_gyro_bias}"/></x>
+                        <y><xacro:imu_noise std="${imu_gyro_std}" bias="${imu_gyro_bias}"/></y>
+                        <z><xacro:imu_noise std="${imu_gyro_std}" bias="${imu_gyro_bias}"/></z>
+                    </angular_velocity>
+                    <linear_acceleration>
+                        <x><xacro:imu_noise std="${imu_accel_std}" bias="0.0"/></x>
+                        <y><xacro:imu_noise std="${imu_accel_std}" bias="0.0"/></y>
+                        <z><xacro:imu_noise std="${imu_accel_std}" bias="0.0"/></z>
+                    </linear_acceleration>
+                </imu>
+                <plugin name="imu_plugin" filename="libgazebo_ros_imu_sensor.so">
+                    <ros>
+                        <namespace>/</namespace>
+                        <remapping>~/out:=imu/data</remapping>
+                    </ros>
+                    <initial_orientation_as_reference>false</initial_orientation_as_reference>
+                    <frame_name>imu_link</frame_name>
+                </plugin>
+            </sensor>
+        </gazebo>
+    </xacro:macro>
+
+    <!-- GPS: gps_link (anten faz merkezi). Topic: /gps/fix (NavSatFix), /gps/vel.
+         Dunya dosyasinda <spherical_coordinates> olmali (yoksa enlem/boylam uretilmez) -->
+    <xacro:macro name="gps_noise" params="std">
+        <noise type="gaussian"><mean>0.0</mean><stddev>${std}</stddev></noise>
+    </xacro:macro>
+
+    <xacro:macro name="gps">
+        <link name="gps_link">
+            <visual>
+                <geometry><box size="${gps_body} ${gps_body} ${gps_body/2}"/></geometry>
+                <material name="grey"/>
+            </visual>
+            <xacro:box_inertial mass="0.05" x="${gps_body}" y="${gps_body}" z="${gps_body/2}">
+                <origin xyz="0 0 0" rpy="0 0 0"/>
+            </xacro:box_inertial>
+        </link>
+        <joint name="gps_joint" type="fixed">
+            <parent link="chassis"/>
+            <child link="gps_link"/>
+            <origin xyz="${gps_x_offset} ${gps_y_offset} ${gps_height - ground_clearance}" rpy="0 0 0"/>
+        </joint>
+        <gazebo reference="gps_link">
+            <sensor name="gps_sensor" type="gps">
+                <always_on>true</always_on>
+                <update_rate>${gps_rate}</update_rate>
+                <gps>
+                    <position_sensing>
+                        <horizontal><xacro:gps_noise std="${gps_h_std}"/></horizontal>
+                        <vertical><xacro:gps_noise std="${gps_v_std}"/></vertical>
+                    </position_sensing>
+                    <velocity_sensing>
+                        <horizontal><xacro:gps_noise std="${gps_vel_std}"/></horizontal>
+                        <vertical><xacro:gps_noise std="${gps_vel_std}"/></vertical>
+                    </velocity_sensing>
+                </gps>
+                <plugin name="gps_plugin" filename="libgazebo_ros_gps_sensor.so">
+                    <ros>
+                        <namespace>/</namespace>
+                        <remapping>~/out:=gps/fix</remapping>
+                        <remapping>~/vel:=gps/vel</remapping>
+                    </ros>
+                    <frame_name>gps_link</frame_name>
                 </plugin>
             </sensor>
         </gazebo>

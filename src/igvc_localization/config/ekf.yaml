@@ -1,0 +1,84 @@
+# igvc_localization: cift EKF (REP-105)
+#   map (ENU, GPS datum'u) --ekf_global--> odom --ekf_local--> base_footprint
+#
+# ---------------------------------------------------------------- yerel EKF
+# odom -> base_footprint (tekerlek + IMU). Surekli cerceve: kontrol ve path_tracker bunu kullanir.
+ekf_local:
+  ros__parameters:
+    mode: local
+    world_frame: odom
+    base_frame: base_footprint
+    publish_tf: true          # igvc_controller'in TF'i kapali olmali (sim.launch ekf:=true)
+    publish_rate: 50.0        # Hz, en fazla
+    max_delay: 0.1            # s, daha eski mesajlar atilir
+    output_topic: /odometry/local
+    wheel_odom_topic: /odom
+    imu_topic: /imu/data
+
+    # Olcum gurultuleri (std)
+    wheel_v_std: 0.05         # m/s
+    # Tekerlek donus hizi std = wheel_w_std + wheel_w_slip * |w| (skid kaymasi donusle artar):
+    # dururken guvenilir (jiro sapmasini ogretir), donerken zayif (jiroskop baskin)
+    wheel_w_std: 0.02         # rad/s, taban
+    wheel_w_slip: 0.5         # (rad/s)/(rad/s)
+    gyro_std: 0.005           # rad/s (BNO085 / sim 0.002 + pay)
+    use_imu_yaw: true
+    imu_yaw_relative: true    # odom cercevesi aracin baslangic yonuyle hizali
+    imu_yaw_std: 0.02         # rad
+
+    # Surec gurultusu spektral yogunluklari [px, py, yaw, v, w, b_g] (birim^2/s)
+    process_noise: [1.0e-4, 1.0e-4, 1.0e-5, 0.5, 1.0, 1.0e-8]
+    initial_covariance: [1.0e-6, 1.0e-6, 1.0e-6, 0.1, 0.1, 1.0e-4]
+    outlier_gate: true
+
+# ---------------------------------------------------------------- global EKF
+# map -> odom (tekerlek + IMU + GPS + mutlak yon). /odometry/global: map'te mutlak konum.
+ekf_global:
+  ros__parameters:
+    mode: global
+    world_frame: map
+    odom_frame: odom
+    base_frame: base_footprint
+    publish_tf: true          # map -> odom
+    publish_rate: 50.0
+    max_delay: 0.2            # s (GPS mesajlari daha gecikmeli gelebilir)
+    output_topic: /odometry/global
+    wheel_odom_topic: /odom
+    imu_topic: /imu/data
+    gps_odom_topic: /gps/odometry
+    gps_vel_topic: /gps/vel
+
+    wheel_v_std: 0.05
+    wheel_w_std: 0.02
+    wheel_w_slip: 0.5
+    gyro_std: 0.005
+    use_imu_yaw: true
+    imu_yaw_relative: false   # mutlak yaw (ENU)
+    imu_yaw_std: 0.02         # rad. Gercek BNO085 mutlak (manyetik) yaw icin buyutun (~0.05)
+    # BNO085 manyetik kuzeye gore yaw verir: ENU yaw = manyetik + sapma. Simulasyonda 0.
+    # Gercek arac: Oakland (IGVC) ~ -7.0, Istanbul ~ +6.0 (NOAA'dan guncel degeri alin)
+    imu_yaw_offset_deg: 0.0
+    heading_source: imu       # imu | gps_course (IMU yaw guvenilmezse: GPS hiz vektoru yonu)
+    course_min_speed: 0.4     # m/s, gps_course icin
+    course_max_turn: 0.3      # rad/s
+    course_std: 0.05          # rad
+    gps_lever: [0.0, 0.0, 1.0]  # anten ofseti [x, y, z], yalnizca TF base_footprint -> gps_link yoksa
+
+    process_noise: [1.0e-4, 1.0e-4, 1.0e-5, 0.5, 1.0, 1.0e-8]
+    initial_covariance: [1.0e-6, 1.0e-6, 1.0e-6, 0.1, 0.1, 1.0e-4]
+    outlier_gate: true        # GPS sicramalari (chi^2 %99.9) reddedilir
+    gps_reset_after: 10       # GPS ust uste bu kadar reddedilirse konum GPS'e yeniden kilitlenir
+                              # (filtre koptu: patinaj/carpisma). 10 Hz'de 1 s
+
+# ---------------------------------------------------------------- GPS odometrisi
+# /gps/fix -> /gps/odometry (map'te anten ENU konumu), /gps/datum (kalici)
+gps_odometry:
+  ros__parameters:
+    # map orijini [enlem, boylam, yukseklik]. Simulasyon: dunya dosyasinin spherical_coordinates
+    # noktasi (map = Gazebo dunya cercevesi). Gercek aracta sahada sabit bir nokta ya da [0.0]
+    # (bos) birakilirsa ilk gecerli fix.
+    datum: [42.668, -83.218, 0.0]
+    settle_fixes: 5           # datum ilk fix'ten alinacaksa atlanan fix sayisi
+    min_std: 0.01             # m, kovaryans alt siniri
+    default_std: 2.0          # m, NavSatFix kovaryansi bilinmiyorsa
+    zero_altitude: true

@@ -69,6 +69,10 @@
     <xacro:lidar name="front" x="${lidar_x_offset}"  yaw="0"     topic="scan_front"/>
     <xacro:lidar name="rear"  x="${-lidar_x_offset}" yaw="${PI}" topic="scan_rear"/>
 
+    <!-- IMU (BNO085) ve GPS (RTK, direk tepesinde) -->
+    <xacro:imu/>
+    <xacro:gps/>
+
     <!-- Diger sensorler buraya eklenecek -->
 
 </robot>

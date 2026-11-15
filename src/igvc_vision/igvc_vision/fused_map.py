@@ -82,7 +82,7 @@ class Source:
     def __init__(self, name):
         self.name = name
         self.msg = None
-        self.t = 0.0           # alis zamani (monotonic)
+        self.t = 0.0           # alis zamani [s], dugum saati (sim'de simulasyon saati)
         self.key = None        # esleme hangi geometri icin hesaplandi
         self.map1 = None       # cv2.remap haritalari: hedef hucre -> kaynak hucre
         self.map2 = None
@@ -189,12 +189,16 @@ class FusedMap(Node):
         if key != src.key:
             self.build_mapping(src, i)
             src.key = key
-        src.msg, src.t = msg, time.monotonic()
+        # Eskilik dugum saatiyle (use_sim_time: simulasyon saati). Duvar saati kullanilirsa yuk
+        # altinda Gazebo yavaslayinca kamera haritasi duvar saatinde stale_timeout'tan gec gelir ve
+        # kamera katmani haritadan anlik duser (kirmizi engeller yanip soner).
+        now_sim = self.get_clock().now().nanoseconds * 1e-9
+        src.msg, src.t = msg, now_sim
 
-        now = time.monotonic()
-        if now - self.last_pub >= self.min_period:
-            self.last_pub = now
-            self.fuse_and_publish(now)
+        wall = time.monotonic()                     # yayin hizi siniri duvar saatiyle
+        if wall - self.last_pub >= self.min_period:
+            self.last_pub = wall
+            self.fuse_and_publish(now_sim)
 
     # ------------------------------------------------------------- birlestirme
     def fuse_and_publish(self, now):

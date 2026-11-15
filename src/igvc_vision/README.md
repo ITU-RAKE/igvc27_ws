@@ -7,7 +7,7 @@ RAKE IGVC aracı için algılama paketi (ROS 2 Humble, `ament_cmake` + Python d�
 | `lidar_map` | `lidar_map.py` | Ön + arka 2D lidardan anlık, araç merkezli occupancy grid |
 | `surround_view` | `surround_view_node.py` | 4 kameradan dairesel kuş bakışı (BEV). Homografiler kamera poz/intrinsic'inden hesaplanır. Model yok. |
 | `four_cam_test` | `four_cam_test.py` | BEV + YOLO segmentasyon (TensorRT). `bev_mask` ve `/yolo_coordinates` yayınlar. |
-| `camera_map` | `camera_map.py` | Kuş bakışında renk filtresi (kırmızı) → engel, gerisi boş: anlık occupancy grid |
+| `camera_map` | `camera_map.py` | Kuş bakışında beyaz şerit çizgileri (ve çukurlar) → engel, gerisi boş: anlık occupancy grid |
 | `fused_map` | `fused_map.py` | `lidar_map` + `camera_map` → tek anlık, şişirilmiş (inflation) maliyet haritası (A* için) |
 
 ## Klasör yapısı
@@ -68,7 +68,7 @@ ros2 launch igvc_vision fused_map.launch.py         # tüm algılama zinciri (wi
 | `/igvc_vision/merged_image_homo_model/compressed` | four_cam_test | BEV + YOLO maskesi bindirilmiş |
 | `/igvc_vision/bev_mask` | four_cam_test | mono8, 0 = boş, sınıf_id + 1 |
 | `/yolo_coordinates` | four_cam_test | Float32MultiArray: [cam_id, x1, x2, y1, y2, ...] |
-| `/igvc_vision/camera_map` | camera_map | OccupancyGrid, `base_footprint`, 2 cm: 100 kırmızı, 0 boş, -1 görülmeyen |
+| `/igvc_vision/camera_map` | camera_map | OccupancyGrid, `base_footprint`, 2 cm: 100 beyaz çizgi, 0 boş, -1 görülmeyen |
 | `/igvc_vision/merged_image_homo/pers_mask` | camera_map | mono8: 255 engel, 0 boş, 100 bilinmiyor |
 | `/fused_map` | fused_map | OccupancyGrid, `base_footprint`, 5 cm, 12 m: 100 engel/öldürücü, 99..1 maliyet, 0 boş, -1 bilinmiyor |
 | `/igvc_vision/fused_map/debug_image` | fused_map | engel: siyah lidar, magenta kamera, koyu mor ikisi; şişirme ısı haritası (JET); açık gri boş, koyu gri bilinmiyor |
@@ -119,13 +119,18 @@ bakışında uzar. Engeller için lidar haritasını kullan.
 
 ## camera_map
 
-- Girdi sıkıştırılmamış `/igvc_vision/merged_image_homo` (JPEG kırmızı kenarlarda sahte piksel üretir).
+- Girdi sıkıştırılmamış `/igvc_vision/merged_image_homo` (JPEG ince çizgilerin kenarını bulanıklaştırır).
 - Kuş bakışı pikseli = grid hücresi (aynı çözünürlük, ek dönüşüm yok). Hafızasız, her karede yeniden.
-- Kırmızı: HSV iki aralık (`hsv_lower1/upper1`, `hsv_lower2/upper2`), `morph_kernel` ile gürültü temizleme.
+- Beyaz = iki koşul birden:
+  - HSV eşiği `hsv_lower`/`hsv_upper` (varsayılan `[0,0,160]`–`[179,60,255]`): düşük doygunluk, yüksek parlaklık.
+  - Yerel kontrast: parlaklık, çevredeki zeminin ortalamasından (`background_kernel_m` = 1,2 m pencere,
+    yalnızca görülen pikseller) en az `contrast_min` (40) fazla. Güneş asfaltı da açtığında sabit
+    eşik tek başına yetmez. `contrast_min: 0` kapatır.
+  - `morph_kernel` ile gürültü temizleme.
 - Görülmeyen alan (siyah), menzil dışı ve araç ayak izi `-1`. Çözünürlük/menzil `surround_view.yaml`'dan,
   ayak izi xacro'dan (launch).
 - ~3 ms/kare; hız `surround_view`'a (~20 Hz) bağlı.
-- Yüksek kırmızı nesneler kuş bakışında kameradan uzağa doğru uzar (homografi zemini düz kabul eder).
+- Yüksek beyaz nesneler (ör. dubaların beyaz bantları) kuş bakışında kameradan uzağa doğru uzar (homografi zemini düz kabul eder).
 
 ## fused_map
 

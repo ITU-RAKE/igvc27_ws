@@ -1,0 +1,23 @@
+# generate_igvc_course.py ciktisi. Merkez hat uzunlugu: 113.2 m (371 ft)
+spawn: [0.000, 3.410, 1.5708]   # x, y, yaw -> sim.launch.py (auto)
+resolution: 0.02
+x_range: [-8.0, 41.0]
+y_range: [-21.0, 21.0]
+track_width: 3.048
+line_width: 0.07619999999999999
+left_x: 0.0
+right_x: 33.0
+bottom_y: -13.0
+top_y: 13.0
+corner_r: 4.0
+chicane_amp: 1.3
+chicane_wavelength: 12.5
+no_mans_land_y: [-7.0, 7.0]
+start_line: True
+potholes: []
+ramp: {'center': (0.0, 0.0), 'width': 2.4384, 'height': 0.3, 'grade': 0.15, 'top_length': 1.2192, 'color': (0.15, 0.45, 0.2)}
+spawn_clearance: 0.8
+pothole_diameter: 0.6096
+asphalt_gray: 45
+asphalt_noise: 6
+line_gray: 235
