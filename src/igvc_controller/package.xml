@@ -21,6 +21,8 @@
   <exec_depend>xacro</exec_depend>
   <!-- Simulasyon: Gazebo + ros2_control (gazebo.launch.py), tekerlek olculeri igvc_macros.xacro'dan -->
   <exec_depend>igvc_description</exec_depend>
+  <!-- sim.launch.py ekf:=true -->
+  <exec_depend>igvc_localization</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

@@ -15,7 +15,7 @@ set(PYTHON_NODES
   lidar_map:lidar_map               # anlik lidar yerel haritasi
   surround_view:surround_view_node  # 4 kamera 360 deg kus bakisi (geometriden homografi)
   four_cam_test:four_cam_test       # kus bakisi + YOLO segmentasyon (TensorRT)
-  camera_map:camera_map             # kus bakisinda kirmizi -> engel occupancy grid
+  camera_map:camera_map             # kus bakisinda beyaz cizgi -> engel occupancy grid
   fused_map:fused_map               # lidar + kamera haritalarini birlestir
 )
 foreach(entry ${PYTHON_NODES})
@@ -55,6 +55,9 @@ if(BUILD_TESTING)
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
       ENV "PYTEST_ADDOPTS=${PYTEST_ADDOPTS_FIX}")
     ament_add_pytest_test(test_costmap test/test_costmap.py
+      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+      ENV "PYTEST_ADDOPTS=${PYTEST_ADDOPTS_FIX}")
+    ament_add_pytest_test(test_camera_map test/test_camera_map.py
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
       ENV "PYTEST_ADDOPTS=${PYTEST_ADDOPTS_FIX}")
   else()

@@ -94,7 +94,8 @@ def _urdf():
 
 def _frame_in_base(root, child, base="base_footprint"):
     """URDF joint origin'lerini zincirleyip child'in base'e gore 4x4 donusumu."""
-    joints = {j.find("child").get("link"): j for j in root.iter("joint")}
+    # Yalnizca robotun ust duzey joint'leri (<ros2_control> icindeki <joint>'lerin <child>'i yok)
+    joints = {j.find("child").get("link"): j for j in root.findall("joint")}
     T = np.eye(4)
     while child != base:
         j = joints[child]

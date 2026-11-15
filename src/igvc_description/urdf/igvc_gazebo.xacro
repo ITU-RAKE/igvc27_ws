@@ -77,11 +77,31 @@
         </xacro:macro>
         <xacro:wheel_interface joint="left_wheel_joint"/>
         <xacro:wheel_interface joint="right_wheel_joint"/>
+        <!-- Caster suspansiyonu: yalnizca durum (komut yok). joint_states'e girer -> caster TF'i -->
+        <joint name="front_caster_joint"><state_interface name="position"/></joint>
+        <joint name="rear_caster_joint"><state_interface name="position"/></joint>
     </ros2_control>
 
     <gazebo>
         <plugin name="gazebo_ros2_control" filename="libgazebo_ros2_control.so">
             <parameters>$(find igvc_description)/config/ros2_controllers.yaml</parameters>
+        </plugin>
+    </gazebo>
+
+    <!-- ===================== GERCEK KONUM (yalnizca simulasyon) =====================
+         /ground_truth/odom: base_footprint'in Gazebo dunya cercevesindeki gercek pozu (gurultusuz).
+         GPS datum'u dunya orijini oldugunda (gps_odometry datum = spherical_coordinates) dunya = map:
+         /odometry/global ile dogrudan karsilastirilir. Lokalizasyon testi: igvc_localization/localization_eval -->
+    <gazebo>
+        <plugin name="ground_truth" filename="libgazebo_ros_p3d.so">
+            <ros>
+                <namespace>/</namespace>
+                <remapping>odom:=ground_truth/odom</remapping>
+            </ros>
+            <body_name>base_footprint</body_name>
+            <frame_name>world</frame_name>
+            <update_rate>50</update_rate>
+            <gaussian_noise>0.0</gaussian_noise>
         </plugin>
     </gazebo>
 

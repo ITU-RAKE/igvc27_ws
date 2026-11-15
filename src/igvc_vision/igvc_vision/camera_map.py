@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 """
-Kus bakisi goruntusunden renk filtresiyle (varsayilan: kirmizi) anlik occupancy grid.
+Kus bakisi goruntusunden beyaz serit cizgilerini (ve cukurlari) engel sayan anlik occupancy grid.
 
 Girdi:
   /igvc_vision/merged_image_homo (sensor_msgs/Image, bgr8)  surround_view'in kus bakisi.
-      Sikistirilmamis topic kullanilir: JPEG renk alt-ornekleme yapar, kirmizi kenarlarda
-      sahte pikseller olusturur.
+      Sikistirilmamis topic kullanilir: JPEG ince cizgilerin kenarlarini bulaniklastirir.
 Cikti:
   /igvc_vision/camera_map (nav_msgs/OccupancyGrid)  base_footprint, arac merkezli, anlik.
-      100 = filtreye uyan renk (engel), 0 = goruluyor ve renk yok (bos),
+      100 = beyaz cizgi (engel), 0 = goruluyor ve cizgi yok (bos),
       -1 = goruntude yok (menzil disi, kor nokta, aracin kendisi).
   /igvc_vision/merged_image_homo/pers_mask (sensor_msgs/Image, mono8)  debug maskesi:
       255 = engel, 0 = bos, 100 = bilinmiyor. Yalnizca abone varsa uretilir.
@@ -17,8 +16,13 @@ Kus bakisi pikseli <-> grid hucresi birebirdir (ayni cozunurluk): ek homografi y
 BEV: yukari = +x (ileri), sag = -y, merkez = base_footprint.
 Hafiza yok, zamanlayici yok: her goruntu gelince isle ve yayinla.
 
-Not: Homografi zemini duz kabul eder; yuksek kirmizi nesneler kus bakisinda (ve haritada)
-kameradan uzaga dogru uzar. Yukseklik bilgisi icin lidar haritasini kullan.
+Beyaz = iki kosul birden (white_mask):
+  1) HSV esigi: dusuk doygunluk (S <= hsv_upper[1]) ve parlak (V >= hsv_lower[2]).
+  2) Yerel kontrast: V, cevresindeki zeminin (background_kernel_m pencerede ortalama) en az
+     contrast_min ustunde. Gunes asfalti da aciklastirir; sabit esik tek basina ya hic cizgi
+     bulmaz ya da tum asfalti beyaz sayar. 0 = kapali.
+Not: Homografi zemini duz kabul eder; yuksek nesneler (orn. dubalarin beyaz bantlari) kus
+bakisinda kameradan uzaga dogru uzar. Yukseklik bilgisi icin lidar haritasini kullan.
 """
 import array
 
@@ -35,6 +39,25 @@ UNKNOWN, FREE, OCCUPIED = -1, 0, 100
 MASK_UNKNOWN, MASK_FREE, MASK_OCCUPIED = 100, 0, 255
 
 
+def white_mask(hsv, valid, lo, hi, contrast_min, bg_ksize):
+    """
+    Beyaz piksel maskesi (0 / 255, uint8).
+
+    hsv: HxWx3 uint8 (OpenCV HSV); valid: HxW bool, gorulen pikseller (kontrast arka plani
+    yalnizca bunlardan hesaplanir: gorulmeyen siyah alan kenardaki asfalti 'parlak' gostermesin).
+    """
+    out = cv2.inRange(hsv, lo, hi)
+    if contrast_min > 0:
+        v = hsv[:, :, 2].astype(np.float32)
+        w = valid.astype(np.float32)
+        # Normalize kutu ortalamasi: sum(v * w) / sum(w), yalnizca gorulen komsular
+        num = cv2.blur(v * w, bg_ksize, borderType=cv2.BORDER_CONSTANT)
+        den = cv2.blur(w, bg_ksize, borderType=cv2.BORDER_CONSTANT)
+        bg = num / np.maximum(den, 1e-6)
+        out[v - bg < contrast_min] = 0
+    return out
+
+
 class CameraMap(Node):
     def __init__(self):
         super().__init__('camera_map')
@@ -45,11 +68,14 @@ class CameraMap(Node):
         self.max_range = p('max_range_m', 4.9).value
         # Arac ayak izi [x0, x1, y0, y1] base_footprint'te (launch xacro'dan verir) -> bilinmiyor
         self.footprint = list(p('footprint_m', [-0.475, 0.475, -0.395, 0.395]).value)
-        # HSV (OpenCV: H 0-179). Kirmizi hue cemberin iki ucunda: iki aralik birlesir.
-        self.lo1 = np.array(p('hsv_lower1', [0, 120, 70]).value, np.uint8)
-        self.hi1 = np.array(p('hsv_upper1', [10, 255, 255]).value, np.uint8)
-        self.lo2 = np.array(p('hsv_lower2', [170, 120, 70]).value, np.uint8)
-        self.hi2 = np.array(p('hsv_upper2', [179, 255, 255]).value, np.uint8)
+        # Beyaz, HSV (OpenCV: H 0-179): renk tonu onemsiz, doygunluk dusuk, parlaklik yuksek
+        self.lo = np.array(p('hsv_lower', [0, 0, 160]).value, np.uint8)
+        self.hi = np.array(p('hsv_upper', [179, 60, 255]).value, np.uint8)
+        # Yerel kontrast: cevre zemin ortalamasindan en az bu kadar parlak (V, 0-255); 0 = kapali.
+        # Pencere cizgiden (3" = 7.6 cm) ve cukurdan (2 ft = 61 cm) genis olmali.
+        self.contrast = int(p('contrast_min', 40).value)
+        kb = max(3, int(round(p('background_kernel_m', 1.2).value / self.res)) | 1)
+        self.bg_ksize = (kb, kb)
         k = int(p('morph_kernel', 3).value)   # gurultu temizleme (acma); 0 = kapali
         self.kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)) if k > 1 else None
         # Gorunur alanin kenarindan bu kadar pikseli at (remap kenar karisimi, menzil dairesi cizgisi)
@@ -66,8 +92,8 @@ class CameraMap(Node):
         self.mask_pub = self.create_publisher(Image, '/igvc_vision/merged_image_homo/pers_mask', 1)
         self.get_logger().info(
             f'Dinleniyor: {self.input_topic} -> /igvc_vision/camera_map, '
-            f'/igvc_vision/merged_image_homo/pers_mask | HSV {self.lo1.tolist()}-{self.hi1.tolist()} '
-            f've {self.lo2.tolist()}-{self.hi2.tolist()}, {self.res * 100:.0f} cm/hucre')
+            f'/igvc_vision/merged_image_homo/pers_mask | beyaz HSV {self.lo.tolist()}-{self.hi.tolist()}, '
+            f'kontrast >= {self.contrast} ({self.bg_ksize[0]} px pencere), {self.res * 100:.0f} cm/hucre')
 
     def build_static_mask(self, n):
         """Menzil disi + arac ayak izi: goruntuden bagimsiz, bir kez hesaplanir (BEV pikselleri)."""
@@ -93,9 +119,6 @@ class CameraMap(Node):
             self.static_unknown = self.build_static_mask(n)
 
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV if msg.encoding == 'bgr8' else cv2.COLOR_RGB2HSV)
-        red = cv2.inRange(hsv, self.lo1, self.hi1) | cv2.inRange(hsv, self.lo2, self.hi2)
-        if self.kernel is not None:
-            red = cv2.morphologyEx(red, cv2.MORPH_OPEN, self.kernel)
 
         # Gorulmeyen: remap'in doldurdugu tam siyah (0,0,0) -> HSV V = max(B,G,R) = 0.
         # Kenar karisimini atmak icin gorulen alan asindirilir.
@@ -104,7 +127,11 @@ class CameraMap(Node):
             seen = cv2.erode(seen, self.erode_kernel)
         unknown = (seen == 0) | self.static_unknown
 
-        mask = red                       # inRange zaten 0 / 255 (= MASK_FREE / MASK_OCCUPIED)
+        white = white_mask(hsv, ~unknown, self.lo, self.hi, self.contrast, self.bg_ksize)
+        if self.kernel is not None:
+            white = cv2.morphologyEx(white, cv2.MORPH_OPEN, self.kernel)
+
+        mask = white                     # 0 / 255 (= MASK_FREE / MASK_OCCUPIED)
         mask[unknown] = MASK_UNKNOWN
 
         self.publish_grid(mask, msg.header, n)

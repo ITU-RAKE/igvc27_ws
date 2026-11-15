@@ -1,6 +1,6 @@
 """Kamera renk haritasi: ros2 launch igvc_vision camera_map.launch.py [with_surround:=true]
 
-surround_view (kus bakisi) + camera_map (kirmizi -> engel occupancy grid).
+surround_view (kus bakisi) + camera_map (beyaz serit cizgileri -> engel occupancy grid).
 BEV cozunurlugu/menzili config/surround_view.yaml'dan, arac ayak izi igvc_macros.xacro'dan
 okunur; boylece iki dugum her zaman ayni geometriyi kullanir.
 """

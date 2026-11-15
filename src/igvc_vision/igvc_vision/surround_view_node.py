@@ -416,10 +416,13 @@ class SurroundViewNode(Node):
 
     # ------------------------------------------------------------------------------
     def _store(self, name, msg):
-        self._latest[name] = (msg, time.monotonic())  # decode döngüde, sadece son kare
+        # Alis zamani dugum saatiyle (use_sim_time: simulasyon saati); bkz. _images
+        self._latest[name] = (msg, self.get_clock().now().nanoseconds * 1e-9)  # decode döngüde
 
     def _images(self):
-        now, out = time.monotonic(), []
+        # Eskilik dugum saatiyle: duvar saatinde yuk altinda Gazebo yavaslayinca kareler stale_s'den
+        # gec gelir, kamera siyaha doner ve kirmizi engeller kus bakisindan anlik kaybolurdu.
+        now, out = self.get_clock().now().nanoseconds * 1e-9, []
         for name in CAMS:
             entry = self._latest[name]
             if entry is None or now - entry[1] > self.stale_s:

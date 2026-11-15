@@ -6,7 +6,7 @@ Girdi:
   /igvc_nav/planned_path (nav_msgs/Path) path_planner'in yolu. Yerel cercevede (base_footprint)
                          gelirse, gelis anindaki odom pozuyla odom cercevesine cevrilir ve saklanir;
                          boylece arac yol uzerinde ilerlerken yol yerinde kalir.
-  /odom                  (nav_msgs/Odometry) igvc_controller
+  /odometry/local        (nav_msgs/Odometry) yerel EKF (igvc_localization); odom_topic ile degisir
 Cikti:
   /cmd_vel               (geometry_msgs/Twist) igvc_controller'a
 
@@ -51,7 +51,7 @@ class PathTracker(Node):
         # Yol bu cercevelerden birinde gelirse yerel sayilir (araca bagli)
         self.local_frames = list(p("local_frames", ["base_footprint", "base_link"]).value)
         path_topic = p("path_topic", "/igvc_nav/planned_path").value
-        odom_topic = p("odom_topic", "/odom").value
+        odom_topic = p("odom_topic", "/odometry/local").value   # EKF (igvc_localization)
         cmd_topic = p("cmd_vel_topic", "/cmd_vel").value
 
         self.robot_x = self.robot_y = self.robot_yaw = 0.0
