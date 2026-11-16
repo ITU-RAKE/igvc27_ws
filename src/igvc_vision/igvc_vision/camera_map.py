@@ -8,6 +8,7 @@ Girdi:
 Cikti:
   /igvc_vision/camera_map (nav_msgs/OccupancyGrid)  base_footprint, arac merkezli, anlik.
       100 = beyaz cizgi (engel), 0 = goruluyor ve cizgi yok (bos),
+      -1 ayrica duba turuncusu (zemin degil: arkasi gorulmuyor),
       -1 = goruntude yok (menzil disi, kor nokta, aracin kendisi).
   /igvc_vision/merged_image_homo/pers_mask (sensor_msgs/Image, mono8)  debug maskesi:
       255 = engel, 0 = bos, 100 = bilinmiyor. Yalnizca abone varsa uretilir.
@@ -31,6 +32,7 @@ import numpy as np
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from nav_msgs.msg import OccupancyGrid
+from rcl_interfaces.msg import SetParametersResult
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Image
@@ -74,6 +76,17 @@ class CameraMap(Node):
         # Yerel kontrast: cevre zemin ortalamasindan en az bu kadar parlak (V, 0-255); 0 = kapali.
         # Pencere cizgiden (3" = 7.6 cm) ve cukurdan (2 ft = 61 cm) genis olmali.
         self.contrast = int(p('contrast_min', 40).value)
+        # Zemin olmayan renk (duba turuncusu) -> bilinmiyor. Homografi dubayi zemin sanip arkaya
+        # uzatir; turuncu piksellere "bos" demek arkadaki seridi kesik gosterir. Engel degil
+        # bilinmiyor: fused_map sisirmez (camur olmaz), planner icin yine gecilemez.
+        # Kirmizi/turuncu: H 0-25 (sim dubasi H 7-11, S ~190).
+        self.ng_lo = np.array(p('nonground_hsv_lower', [0, 100, 50]).value, np.uint8)
+        self.ng_hi = np.array(p('nonground_hsv_upper', [25, 255, 255]).value, np.uint8)
+        kd = int(p('nonground_dilate_px', 2).value)   # kenar karisimi icin genisletme (2 cm/px)
+        self.ng_kernel = np.ones((2 * kd + 1,) * 2, np.uint8) if kd > 0 else None
+        # Calisirken ac/kapa: ros2 param set /camera_map nonground_unknown false
+        self.ng_enabled = bool(p('nonground_unknown', True).value)
+        self.add_on_set_parameters_callback(self.on_params)
         kb = max(3, int(round(p('background_kernel_m', 1.2).value / self.res)) | 1)
         self.bg_ksize = (kb, kb)
         k = int(p('morph_kernel', 3).value)   # gurultu temizleme (acma); 0 = kapali
@@ -85,8 +98,11 @@ class CameraMap(Node):
         self.grid_lut[MASK_FREE], self.grid_lut[MASK_OCCUPIED] = FREE, OCCUPIED
 
         self.static_unknown = None  # boyut ilk goruntude belli olur
+        # RELIABLE: ham kus bakisi ~750 KB; BEST_EFFORT'ta DDS parcalarindan biri kaybolunca kare
+        # duser (olculen: 8.7 Hz yayinda 4.6 Hz alim, 1 s'ye varan bosluk). Bosluk fused_map'in
+        # stale_timeout'unu (0.5 s) asinca kamera katmani (serit cizgileri) haritadan kayboluyordu.
         qos = QoSProfile(depth=1, history=HistoryPolicy.KEEP_LAST,
-                         reliability=ReliabilityPolicy.BEST_EFFORT)
+                         reliability=ReliabilityPolicy.RELIABLE)
         self.create_subscription(Image, self.input_topic, self.on_image, qos)
         self.map_pub = self.create_publisher(OccupancyGrid, '/igvc_vision/camera_map', 1)
         self.mask_pub = self.create_publisher(Image, '/igvc_vision/merged_image_homo/pers_mask', 1)
@@ -94,6 +110,13 @@ class CameraMap(Node):
             f'Dinleniyor: {self.input_topic} -> /igvc_vision/camera_map, '
             f'/igvc_vision/merged_image_homo/pers_mask | beyaz HSV {self.lo.tolist()}-{self.hi.tolist()}, '
             f'kontrast >= {self.contrast} ({self.bg_ksize[0]} px pencere), {self.res * 100:.0f} cm/hucre')
+
+    def on_params(self, params):
+        for prm in params:
+            if prm.name == 'nonground_unknown':
+                self.ng_enabled = bool(prm.value)
+                self.get_logger().info(f'nonground_unknown = {self.ng_enabled}')
+        return SetParametersResult(successful=True)
 
     def build_static_mask(self, n):
         """Menzil disi + arac ayak izi: goruntuden bagimsiz, bir kez hesaplanir (BEV pikselleri)."""
@@ -132,6 +155,11 @@ class CameraMap(Node):
             white = cv2.morphologyEx(white, cv2.MORPH_OPEN, self.kernel)
 
         mask = white                     # 0 / 255 (= MASK_FREE / MASK_OCCUPIED)
+        if self.ng_enabled:
+            nonground = cv2.inRange(hsv, self.ng_lo, self.ng_hi)
+            if self.ng_kernel is not None:
+                nonground = cv2.dilate(nonground, self.ng_kernel)
+            mask[(nonground > 0) & (white == 0)] = MASK_UNKNOWN
         mask[unknown] = MASK_UNKNOWN
 
         self.publish_grid(mask, msg.header, n)

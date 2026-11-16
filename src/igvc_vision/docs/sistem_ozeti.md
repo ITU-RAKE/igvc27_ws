@@ -13,8 +13,8 @@
 | Ön/arka kamera | x = ±0.325 | x = ±0.35 |
 | Sol/sağ kamera | y = ±0.200 | y = ±0.21 |
 | Kamera yüksekliği / eğim | 1.00 m / 43° | 1.0 m / 43° |
-| Çözünürlük | 1280×854 | 720×480 |
-| Intrinsic fx = fy, cx, cy | 556.3435, 639.5, 426.5 | 312.94, 360, 240 |
+| Çözünürlük | 640×427 (simde 1280×854 idi; kamera hızı için düşürüldü) | 720×480 |
+| Intrinsic fx = fy, cx, cy | 278.1718, 319.5, 213.0 | 312.94, 360, 240 |
 | Gövde modeli | kesik piramit (taban 0.95×0.65, tavan 0.85×0.6, zeminden 0.10–0.40 m) + 2 tekerlek | kutu 0.93×0.65×0.34 |
 | Ayak izi (tekerlek dahil) | 0.950 × 0.790 m | 0.93 × 0.65 m |
 | Kesintisiz menzil / kapsama (4.9 m) | 4.90 m / %99.9 | 4.88 m / %99.7 |

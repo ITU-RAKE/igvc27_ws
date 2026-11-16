@@ -10,7 +10,9 @@ igvc_controller:
 
     max_linear_velocity: 1.5       # m/s (IGVC hiz siniri 5 mph = 2.2 m/s)
     max_angular_velocity: 2.0      # rad/s
-    max_linear_acceleration: 1.0   # m/s^2
+    max_linear_acceleration: 1.0   # m/s^2 (1.5 denendi)
+    max_wheel_velocity: 20.0       # rad/s (URDF). Asilirsa v ve w ayni oranda olceklenir (egrilik korunur).
+                                   # Gercek arac 1.5 m/s tepe -> 15 (r = 0.10 m). Hizli setlerde 15 denendi.
     max_angular_acceleration: 3.0  # rad/s^2
     cmd_timeout: 0.5               # s, komut kesilirse dur
     control_rate: 50.0             # Hz

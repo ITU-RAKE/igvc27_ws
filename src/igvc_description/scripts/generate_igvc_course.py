@@ -44,9 +44,12 @@ COURSE = {
     # cikis rampasi + ust duzluk + inis rampasi. Bos sozluk ({}) -> rampa yok.
     'ramp': {'center': (0.0, 0.0), 'width': 8 * FT, 'height': 0.30, 'grade': 0.15,
              'top_length': 4 * FT, 'color': (0.15, 0.45, 0.20)},
-    # Aracin dogma noktasi: rampanin kuzey ucundan bu kadar ileride, sol duzlukte, kuzeye bakar.
-    # course.yaml'a 'spawn' olarak yazilir; sim.launch.py (yaw/x/y auto) oradan okur.
+    # Baslangic cizgisi: rampanin kuzey ucundan bu kadar ileride, sol duzlukte.
     'spawn_clearance': 0.8,
+    # Aracin dogma noktasi: cizginin bu kadar ilerisinde (base_link), kuzeye bakar, arkasi cizgiye
+    # donuk. 0.6 = yarim cizgi 0.04 + govde yarisi 0.475 + ~8 cm pay: cizgi aracin altinda kalmaz.
+    # course.yaml'a 'spawn' olarak yazilir; sim.launch.py (yaw/x/y auto) oradan okur.
+    'spawn_ahead_of_line': 0.6,
     'pothole_diameter': 2 * FT,
     'asphalt_gray': 45, 'asphalt_noise': 6, 'line_gray': 235,
 }
@@ -298,7 +301,8 @@ def main():
         f.write(MODEL_SDF.replace('{g}', f"{COURSE['asphalt_gray'] / 255:.3f}").replace('{ramp}', ramp_xml))
     with open(os.path.join(out, 'course.yaml'), 'w') as f:
         f.write(f'# generate_igvc_course.py ciktisi. Merkez hat uzunlugu: {length:.1f} m ({length / FT:.0f} ft)\n')
-        sx, sy, syaw = spawn_pose(COURSE)
+        sx, sy, syaw = spawn_pose(COURSE)        # baslangic cizgisinin konumu
+        sy += COURSE['spawn_ahead_of_line']      # arac cizginin onunde
         f.write(f'spawn: [{sx:.3f}, {sy:.3f}, {syaw:.4f}]   # x, y, yaw -> sim.launch.py (auto)\n')
         for k, v in COURSE.items():
             f.write(f'{k}: {list(v) if isinstance(v, tuple) else v}\n')

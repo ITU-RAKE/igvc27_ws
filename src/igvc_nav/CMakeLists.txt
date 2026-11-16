@@ -37,4 +37,14 @@ install(
   DESTINATION share/${PROJECT_NAME}
 )
 
+if(BUILD_TESTING)
+  find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(test_frontier test/test_frontier.py
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    ENV "PYTEST_ADDOPTS=-p no:anyio")
+  ament_add_pytest_test(test_tracker_core test/test_tracker_core.py
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    ENV "PYTEST_ADDOPTS=-p no:anyio")
+endif()
+
 ament_package()

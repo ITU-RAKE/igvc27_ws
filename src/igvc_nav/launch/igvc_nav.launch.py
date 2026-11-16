@@ -23,5 +23,6 @@ def generate_launch_description():
             PythonLaunchDescriptionSource(os.path.join(nav, 'path_planner.launch.py')),
             launch_arguments={'with_maps': 'false', 'use_sim_time': sim_time}.items()),
         Node(package='igvc_nav', executable='path_tracker', name='path_tracker',
-             output='screen', parameters=[{'use_sim_time': sim_time}]),
+             output='screen', parameters=[os.path.join(get_package_share_directory('igvc_nav'), 'config', 'path_tracker.yaml'),
+                         {'use_sim_time': sim_time}]),
     ])

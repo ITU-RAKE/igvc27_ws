@@ -1,5 +1,5 @@
 # generate_igvc_course.py ciktisi. Merkez hat uzunlugu: 113.2 m (371 ft)
-spawn: [0.000, 3.410, 1.5708]   # x, y, yaw -> sim.launch.py (auto)
+spawn: [0.000, 4.010, 1.5708]   # x, y, yaw -> sim.launch.py (auto); baslangic cizgisi y=3.41, arac 0.6 m ilerisinde
 resolution: 0.02
 x_range: [-8.0, 41.0]
 y_range: [-21.0, 21.0]
@@ -17,6 +17,7 @@ start_line: True
 potholes: []
 ramp: {'center': (0.0, 0.0), 'width': 2.4384, 'height': 0.3, 'grade': 0.15, 'top_length': 1.2192, 'color': (0.15, 0.45, 0.2)}
 spawn_clearance: 0.8
+spawn_ahead_of_line: 0.6
 pothole_diameter: 0.6096
 asphalt_gray: 45
 asphalt_noise: 6

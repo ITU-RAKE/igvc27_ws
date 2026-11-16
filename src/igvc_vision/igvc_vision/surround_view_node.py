@@ -29,6 +29,7 @@ Yayınlar:
 """
 
 import array
+from concurrent.futures import ThreadPoolExecutor
 import math
 import time
 
@@ -393,6 +394,9 @@ class SurroundViewNode(Node):
         # Durum
         self._latest = {n: None for n in CAMS}
         self._cache = {n: (None, None) for n in CAMS}
+        # 4 x 1280x960 JPEG cozme dongunun cogunu aliyordu (~40 ms); cv2.imdecode GIL'i birakir,
+        # paralel cozme ile ~4x kisalir.
+        self._pool = ThreadPoolExecutor(max_workers=len(CAMS))
         self.blank = np.zeros((self.img_h, self.img_w, 3), np.uint8)
         self._warned_size = set()
         side = self.img_w + 2 * self.img_h
@@ -411,29 +415,48 @@ class SurroundViewNode(Node):
                              if self.publish_raw_homo else None)
         self.pub_raw_img = (self.create_publisher(Image, raw_topic, 10)
                             if self.publish_raw_merged else None)
-        self.create_timer(1.0 / rate, self.loop)
+        # Dongu yeni on kamera karesiyle tetiklenir (en fazla rate_hz); zamanlayici yalnizca yedek
+        # (on kamera susarsa). Yalnizca zamanlayiciyla: dongu ~35 ms + kamera geri cagrilari 50 ms
+        # periyodu asinca tik kaciyor, cikis ~8 Hz'e dusuyordu.
+        self._min_period = 1.0 / rate
+        self._last_loop = 0.0
+        self.create_timer(1.0 / rate, lambda: self._maybe_loop(fallback=True))
         self.get_logger().info("Surround-view node başlatıldı.")
 
     # ------------------------------------------------------------------------------
     def _store(self, name, msg):
         # Alis zamani dugum saatiyle (use_sim_time: simulasyon saati); bkz. _images
         self._latest[name] = (msg, self.get_clock().now().nanoseconds * 1e-9)  # decode döngüde
+        if name == CAMS[0]:
+            self._maybe_loop()
+
+    def _maybe_loop(self, fallback=False):
+        now = time.monotonic()
+        # Yedek zamanlayici: on kamera 2 periyottur gelmiyorsa dongu yine calissin
+        if now - self._last_loop >= (2.0 * self._min_period if fallback else 0.9 * self._min_period):
+            self._last_loop = now
+            self.loop()
 
     def _images(self):
         # Eskilik dugum saatiyle: duvar saatinde yuk altinda Gazebo yavaslayinca kareler stale_s'den
         # gec gelir, kamera siyaha doner ve kirmizi engeller kus bakisindan anlik kaybolurdu.
         now, out = self.get_clock().now().nanoseconds * 1e-9, []
+        jobs = {}
+        for name in CAMS:
+            entry = self._latest[name]
+            if entry is not None and now - entry[1] <= self.stale_s and self._cache[name][0] is not entry[0]:
+                jobs[name] = (entry[0], self._pool.submit(
+                    cv2.imdecode, np.frombuffer(entry[0].data, np.uint8), cv2.IMREAD_COLOR))
         for name in CAMS:
             entry = self._latest[name]
             if entry is None or now - entry[1] > self.stale_s:
                 out.append(self.blank)
                 continue
-            msg = entry[0]
-            cmsg, cimg = self._cache[name]
-            if cmsg is msg:
-                out.append(cimg)
+            if name not in jobs:
+                out.append(self._cache[name][1])
                 continue
-            img = cv2.imdecode(np.frombuffer(msg.data, np.uint8), cv2.IMREAD_COLOR)
+            msg, fut = jobs[name]
+            img = fut.result()
             if img is None:
                 out.append(self.blank)
                 continue

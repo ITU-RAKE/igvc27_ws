@@ -33,6 +33,7 @@ def generate_launch_description():
             executable='path_tracker',
             name='path_tracker',
             output='screen',
-            parameters=[{'use_sim_time': sim_time}],
+            parameters=[os.path.join(get_package_share_directory('igvc_nav'), 'config', 'path_tracker.yaml'),
+                         {'use_sim_time': sim_time}],
         ),
     ])

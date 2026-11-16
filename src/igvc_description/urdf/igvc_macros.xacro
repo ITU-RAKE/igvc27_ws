@@ -55,10 +55,10 @@
     <xacro:property name="camera_yaw"      value="0.0"/>    <!-- her kameranin kendi yonune eklenir -->
     <!-- FOV: Gazebo (pinhole, kare piksel) yalnizca yatay FOV alir; dikey FOV
          en-boy oranindan cikar: vfov = 2*atan(tan(hfov/2) * h / w).
-         98x75 icin oran ~1.5 (3:2) gerekir -> yukseklik genislikten hesaplanir (1280x854). -->
+         98x75 icin oran ~1.5 (3:2) gerekir -> yukseklik genislikten hesaplanir (640x427). -->
     <xacro:property name="camera_hfov"     value="${radians(98)}"/>  <!-- yatay FOV -->
     <xacro:property name="camera_vfov"     value="${radians(75)}"/>  <!-- dikey FOV -->
-    <xacro:property name="camera_img_w"    value="1280"/>
+    <xacro:property name="camera_img_w"    value="640"/>  <!-- 1280'den dusuruldu: Gazebo kameralari 14 -> 28 Hz, kus bakisi 14 -> 22 Hz; seritte kayip ~%4 (uzak uclar incelir). Homografi icin intrinsics buradan hesaplanir. -->
     <xacro:property name="camera_img_h"
                     value="${int(round(camera_img_w*tan(camera_vfov/2)/tan(camera_hfov/2)))}"/>
     <xacro:property name="camera_rate"     value="30"/>

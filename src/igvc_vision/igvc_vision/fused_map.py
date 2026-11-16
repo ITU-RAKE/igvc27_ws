@@ -20,10 +20,17 @@ Cikti:
 Inflation (igvc_vision/costmap.py): A* araci nokta olarak planlar.
   lethal_radius_m    = ic teget yaricap (yari genislik) + 5 cm = 0.445 m: arac merkezi buraya
                        girerse govde engele kesin carpar -> 100
-  inflation_radius_m = cevrel yaricap sqrt((L/2)^2 + (W/2)^2) = 0.618 m: yerinde donerken kose
-                       carpabilir -> buraya kadar dogrusal azalan maliyet
+  inflation_radius_m = cevrel yaricap sqrt((L/2)^2 + (W/2)^2) = 0.618 m (+ launch
+                       inflation_gradient_extra_m, varsayilan 0): buraya kadar azalan maliyet.
+                       Pay > 0 ise ustel profil (inflation_profile: exp): siyah bolge degismez,
+                       gradyan genisler. igvc_course'ta tam turda faydasi gorulmedi (bkz. launch).
 Launch ikisini de igvc_macros.xacro'dan hesaplar. Calisirken degistirilebilir:
   ros2 param set /fused_map inflation_radius_m 0.8   (ornegin rampada daraltmak icin)
+
+Lidar golgesi (lidar_shadow, varsayilan acik): lidar engelinin arkasindaki (arac merkezinden
+isin boyunca) bolgede kamera verisi atilir; orasi lidar'a gore de bilinmiyorsa bilinmiyor kalir.
+Homografi duba gibi yuksek cisimleri zemin sanip arkaya dogru uzatir; o piksellere "bos" demek
+dubanin arkasindaki seridi kesik gosteriyordu. Bilinmeyen alan planner icin gecilemez.
 
 Birlestirme kurali (hucre bazinda):
   herhangi bir kaynak dolu (100)    -> dolu   (lidar yuksek engel, kamera serit/kirmizi gorur)
@@ -52,7 +59,7 @@ from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Image
 
-from igvc_vision.costmap import inflate
+from igvc_vision.costmap import inflate, shadow_mask
 
 UNKNOWN, FREE, OCCUPIED = -1, 0, 100
 
@@ -104,14 +111,22 @@ class FusedMap(Node):
         # Inflation (launch xacro'dan: ic teget + pay, cevrel yaricap). 0 = kapali.
         self.lethal_r = float(p('lethal_radius_m', 0.445).value)
         self.inflation_r = float(p('inflation_radius_m', 0.618).value)
+        # Gradyan profili: linear | exp (launch: exp, gradyan yarim kosegen + inflation_gradient_extra_m)
+        self.profile = p('inflation_profile', 'linear').value
         self.stale = float(p('stale_timeout', 0.5).value)     # s
+        # Lidar golgesi: lidar engelinin arkasinda kalan bolgede kameranin "bos" ve "engel"
+        # iddialari yok sayilir (bilinmiyor). Homografi yuksek cismi (duba) zemin sanip arkaya
+        # dogru uzatir: turuncu kisim "bos" goruldugu icin arkadaki serit kesik gorunuyordu,
+        # beyaz bantlar da buyuk sahte engel oluyordu. Gorulmeyen yere bos denmez.
+        self.lidar_shadow = bool(p('lidar_shadow', True).value)
+        self.shadow_margin = int(round(float(p('shadow_margin_m', 0.10).value) / self.res))
         rate = float(p('max_publish_rate', 30.0).value)
         self.min_period = 1.0 / rate if rate > 0 else 0.0
         lidar_topic = p('lidar_topic', '/lidar_map').value
         camera_topic = p('camera_topic', '/igvc_vision/camera_map').value
         # Arac izdusumu [x0, x1, y0, y1] (launch xacro'dan verir), yalnizca debug cizimi icin
         self.footprint = list(p('footprint_m', [-0.475, 0.475, -0.395, 0.395]).value)
-        self.img_scale = int(p('debug_image_scale', 3).value)
+        self.img_scale = int(p('debug_image_scale', 1).value)   # 1: 240x240 (rqt pencereye olcekler)
 
         self.add_on_set_parameters_callback(self.on_params)
         self.sources = {'lidar': Source('lidar'), 'camera': Source('camera')}
@@ -128,11 +143,16 @@ class FusedMap(Node):
         self.get_logger().info(
             f'Birlestiriliyor: {lidar_topic} + {camera_topic} -> /fused_map ({self.frame}, '
             f'{self.n}x{self.n} @ {self.res} m), /igvc_vision/fused_map/debug_image | '
-            f'inflation: oldurucu {self.lethal_r:.3f} m, sifira inis {self.inflation_r:.3f} m')
+            f'inflation: oldurucu {self.lethal_r:.3f} m, sifira inis {self.inflation_r:.3f} m '
+            f'({self.profile})')
 
     def on_params(self, params):
         """Calisirken inflation ayari (orn. rampa modunda daraltmak icin)."""
         for prm in params:
+            if prm.name == 'lidar_shadow':
+                self.lidar_shadow = bool(prm.value)
+                self.get_logger().info(f'lidar_shadow = {self.lidar_shadow}')
+                continue
             if prm.name in ('lethal_radius_m', 'inflation_radius_m'):
                 if prm.value < 0:
                     return SetParametersResult(successful=False, reason='negatif olamaz')
@@ -203,14 +223,13 @@ class FusedMap(Node):
     # ------------------------------------------------------------- birlestirme
     def fuse_and_publish(self, now):
         shape = (self.n, self.n)
-        occ = {}
-        free = np.zeros(shape, bool)
+        occ, frees = {}, {}
         stamp = None
         for name, src in self.sources.items():
             if src.msg is None or now - src.t > self.stale:
                 continue
             o, f = self.resample(src)
-            free |= f
+            frees[name] = f
             occ[name] = o
             s = src.msg.header.stamp
             if stamp is None or (s.sec, s.nanosec) > (stamp.sec, stamp.nanosec):
@@ -220,11 +239,17 @@ class FusedMap(Node):
 
         lidar = occ.get('lidar', np.zeros(shape, bool))
         camera = occ.get('camera', np.zeros(shape, bool))
+        cam_free = frees.get('camera', np.zeros(shape, bool))
+        if self.lidar_shadow and 'lidar' in occ:
+            sh = shadow_mask(lidar, self.shadow_margin)
+            camera = camera & ~sh
+            cam_free = cam_free & ~sh
+        free = frees.get('lidar', np.zeros(shape, bool)) | cam_free
         any_occ = lidar | camera
         grid = np.full(shape, UNKNOWN, np.int8)
         grid[free] = FREE
         grid[any_occ] = OCCUPIED
-        grid = inflate(grid, self.res, self.lethal_r, self.inflation_r)
+        grid = inflate(grid, self.res, self.lethal_r, self.inflation_r, self.profile)
 
         m = OccupancyGrid()
         m.header.stamp = stamp

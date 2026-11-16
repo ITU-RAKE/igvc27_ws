@@ -1,7 +1,7 @@
 """Inflation (igvc_vision/costmap.py) testleri."""
 import numpy as np
 
-from igvc_vision.costmap import inflate
+from igvc_vision.costmap import inflate, shadow_mask
 
 RES = 0.05
 LETHAL, INFL = 0.445, 0.618
@@ -54,3 +54,27 @@ def test_input_costs_below_100_are_not_obstacles():
     g = _grid()
     g[50, 40:61] = 50
     assert np.array_equal(inflate(g, RES, LETHAL, INFL), g)
+
+
+def test_exp_profile_convex_and_same_lethal():
+    """Ustel profil: siyah ayni, uclar 99 ve 1, ortada dogrusaldan dusuk (disbukey)."""
+    g = _grid()
+    g[50, 50] = 100
+    lin = inflate(g, RES, LETHAL, 1.1)
+    exp = inflate(g, RES, LETHAL, 1.1, profile='exp')
+    assert np.array_equal(lin == 100, exp == 100)
+    near = _at(exp, 0.50)                                   # siyahin hemen disi
+    assert 50 < near <= 99
+    assert _at(exp, 0.80) < _at(lin, 0.80)                  # ortada daha ucuz
+    assert 1 <= _at(exp, 1.05) <= 3 and _at(exp, 1.20) == 0
+
+
+def test_shadow_behind_obstacle_only():
+    """Merkezden bakinca engelin arkasi golge, onu ve yanlari degil."""
+    occ = np.zeros((101, 101), bool)
+    occ[48:53, 70:73] = True                                  # merkezin +x yonunde 1 m
+    sh = shadow_mask(occ, margin_cells=2)
+    assert sh[50, 80] and sh[50, 99]                          # arkasi
+    assert not sh[50, 60] and not sh[50, 30]                  # onu, ters yon
+    assert not sh[20, 85] and not sh[80, 85]                  # yanlar
+    assert not shadow_mask(np.zeros((101, 101), bool)).any()
