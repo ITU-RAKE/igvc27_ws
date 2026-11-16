@@ -94,3 +94,29 @@ def test_clearance_slowdown():
     v_near, _, _ = compute_command(path, (1.5, 0, 0), 1.0, prm, costs=costs)
     v_off, _, _ = compute_command(path, (1.5, 0, 0), 1.0, dict(prm, clearance_slowdown=0.0), costs=costs)
     assert v_near == pytest.approx(1.5 * (1 - 0.6 * 90 / 99), rel=1e-3) and v_off > v_near
+
+
+# ---------------------------------------------------------------- standart mod
+from igvc_nav.tracker_core import compute_command_standard  # noqa: E402
+
+
+def test_standard_fixed_lookahead_and_speed():
+    v, w, info = compute_command_standard(line(0, 5), (0, 0, 0), 0.0, {'max_v': 1.0})
+    assert info['lookahead'] == pytest.approx(0.8) and v == pytest.approx(1.0) and abs(w) < 1e-6
+    # viraj freni yok: dar yayda da hiz yalnizca yon hatasiyla duser
+    v2, w2, _ = compute_command_standard(arc(1.0, math.pi / 2), (0, 0, 0), 1.0, {'max_v': 1.0})
+    assert w2 > 0 and v2 > 0.5
+
+
+def test_standard_dynamic_lookahead():
+    prm = {'dynamic_lookahead': True, 'lookahead_min': 0.5, 'lookahead_time': 0.5, 'lookahead_max': 1.2}
+    assert compute_command_standard(line(0, 5), (0, 0, 0), 0.0, prm)[2]['lookahead'] == pytest.approx(0.5)
+    assert compute_command_standard(line(0, 5), (0, 0, 0), 2.0, prm)[2]['lookahead'] == pytest.approx(1.2)
+
+
+def test_standard_reverse_only_for_recovery():
+    back = [(0, 0), (-0.5, 0), (-1.0, 0)]
+    v, _, info = compute_command_standard(back, (0, 0, 0), 0.0, reverse=True)
+    assert v < 0 and info['mode'] == 'reverse'
+    v, w, info = compute_command_standard(line(0, -3), (0, 0, 0), 0.0, reverse=False)
+    assert v > 0 and info['mode'] == 'forward'      # uzun arkadaki yol: geri vites yok

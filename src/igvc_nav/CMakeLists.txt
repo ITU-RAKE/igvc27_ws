@@ -14,6 +14,8 @@ ament_python_install_package(${PROJECT_NAME})
 set(PYTHON_NODES
   path_planner:path_planner         # fused_map uzerinde hedef secimi + A* yerel yol
   path_tracker:path_tracker         # planned_path'i pure pursuit ile takip -> /cmd_vel
+  standart_path_planner:standart_path_planner   # ilk entegre edilen planner (karsilastirma)
+  standart_path_tracker:standart_path_tracker   # ilk entegre edilen tracker (karsilastirma)
 )
 foreach(entry ${PYTHON_NODES})
   string(REPLACE ":" ";" parts ${entry})

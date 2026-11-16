@@ -24,6 +24,8 @@ dar S'lerde virajin icinden kesip dubaya surtunuyordu. Burada her kontrol adimin
   5b) clearance_slowdown > 0 ise: yolun onumuzdeki clearance_window metresindeki en yuksek harita
      maliyeti c (planner pose.z'ye yazar): v <= max_v * (1 - clearance_slowdown * (c / 99)^clearance_power).
      clearance_power > 1: orta maliyette (serit kenari, genis gecit) az, oldurucu sinira yakin cok yavaslar.
+  7) Standart mod (compute_command_standard): standart tracker'in sade pure pursuit yasasi
+     (sabit 0.8 m ya da hiza bagli dinamik lookahead), geri vites kurali bu dosyadaki gibi.
   6) Geri vites yalnizca yol bir RECOVERY yoluysa (reverse=True: yol geldigi anda aracin
      tamamen arkasindaydi; bunu cagiran karar verir). Ileri bir yolun hedefi arac donerken
      arkada kalirsa geri gitmez, yerinde doner.
@@ -164,6 +166,56 @@ def compute_command(path, pose, speed, prm=None, reverse=False, costs=None):
         v = min(v, k['max_v'] * max(0.0, 1.0 - k['clearance_slowdown'] * (c / 99.0) ** k['clearance_power']))
         info['cost_ahead'] = c
     if j == len(p) - 1 and dist < 0.5:              # yolun sonuna yaklasirken yavasla
+        v *= dist / 0.5
+    info['mode'] = 'forward'
+    return max(v, k['min_v']), w, info
+
+
+STANDARD_DEFAULTS = dict(
+    kp=1.0, max_v=1.0, min_v=0.1, max_w=2.0, slowdown_yaw_error=0.8, lookahead=0.8,
+    dynamic_lookahead=False, lookahead_min=0.5, lookahead_max=1.2, lookahead_time=0.5,
+    closest_search=1.0,
+)
+
+
+def compute_command_standard(path, pose, speed, prm=None, reverse=False):
+    """Standart tracker'in kontrol yasasi (standart_path_tracker.control_loop):
+      - en yakin noktadan yol boyunca lookahead'i asan ilk nokta hedef (yoksa yolun sonu),
+      - w = kp * yon hatasi, v = min_v + (max_v - min_v) * (1 - |hata| / slowdown_yaw_error),
+      - hedefe 0.5 m'den yakinsa yavaslar, 0.1 m'de durur. Viraj/egrilik freni, yerinde donme yok.
+    Farklar: geri vites yalnizca RECOVERY yolunda (reverse, is_recovery_path; standart her arkadaki
+    hedefe geri giderdi: iz duzeltmesi korunur) ve en yakin nokta yolun ilk closest_search
+    metresinde aranir (S yolun ileri kismina atlamasin).
+    dynamic_lookahead=True: lookahead = lookahead_min + lookahead_time * |hiz|, en fazla lookahead_max
+      (yalnizca hiza bagli; egrilikle kisalmaz).
+    Dondurur: (v, w, info) compute_command ile ayni."""
+    k = dict(STANDARD_DEFAULTS, **(prm or {}))
+    rx, ry, ryaw = pose
+    info = {'lookahead': 0.0, 'curvature': 0.0, 'target': None, 'mode': 'stop'}
+    p = resample(path)
+    if len(p) == 0:
+        return 0.0, 0.0, info
+    n_search = max(1, min(len(p), int(k['closest_search'] / 0.05) + 1))
+    i0 = int(np.argmin((p[:n_search, 0] - rx) ** 2 + (p[:n_search, 1] - ry) ** 2))
+    if k['dynamic_lookahead']:
+        ld = min(k['lookahead_max'], k['lookahead_min'] + k['lookahead_time'] * abs(speed))
+    else:
+        ld = k['lookahead']
+    j = min(len(p) - 1, i0 + max(1, int(math.floor(ld / 0.05)) + 1))   # yol boyunca > ld
+    tx, ty = p[j]
+    info.update(lookahead=ld, target=(float(tx), float(ty)))
+    dx, dy = tx - rx, ty - ry
+    dist = math.hypot(dx, dy)
+    if dist < 0.1:
+        return 0.0, 0.0, info
+    if reverse:
+        info['mode'] = 'reverse'
+        return -k['min_v'], clamp(k['kp'] * wrap(math.atan2(dy, dx) - ryaw - math.pi), k['max_w']), info
+    yaw_err = wrap(math.atan2(dy, dx) - ryaw)
+    w = clamp(k['kp'] * yaw_err, k['max_w'])
+    factor = max(0.0, 1.0 - abs(yaw_err) / k['slowdown_yaw_error'])
+    v = k['min_v'] + (k['max_v'] - k['min_v']) * factor
+    if dist < 0.5:
         v *= dist / 0.5
     info['mode'] = 'forward'
     return max(v, k['min_v']), w, info

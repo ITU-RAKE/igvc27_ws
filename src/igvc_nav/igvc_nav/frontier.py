@@ -30,6 +30,13 @@ Adimlar (hepsi vektorel / C, 240x240 haritada ~20-40 ms):
      Dijkstra'dan: engellerden uzak, ortalanmis. Arac oraya kadar ilerler, harita ilerledikce
      yenilenir.
   5) Yol: Dijkstra'nin onculeri (A* gerekmez, hedefe her zaman ulasir).
+  6) Standart yaklasma (standard_depth > 0, planner standart_mode): 3'te secilen frontier hedefi G
+     "nereye" kararidir (cep, iz, arkaya donme burada verilir). Ustune standart planner'in BFS hedefi
+     B hesaplanir (ileri + yana, standard_depth katman, skor ileri*x - |yanal|*y + derinlik*depth
+     - deger*goal_cost): engel gorundugu an engelin yanina kayar, yol erken ve yumusak doner.
+     B yalnizca G'ye giden rotanin uzerindeyse kabul: geo(s->B) + geo(B->G) <= geo(s->G) + route_slack.
+     Cepteki ya da ters yondeki B bu kosulu gecemez (girip cikmak rotayi uzatir); o zaman G kalir.
+     Fallback / geri gidis / bloke durumlarinda kullanilmaz (dar alan ve iz davranisi aynen kalir).
 """
 import math
 
@@ -44,7 +51,8 @@ NEIGHBORS = [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1
 def plan(data, start, *, cost_threshold=99, cost_coeff=8.5, x_coeff=2.0, y_coeff=1.1,
          goal_cost_coeff=5.0, detour_coeff=1.0, min_goal_dist=20,
          min_unknown_area=100, fallback_max_cost=50, use_frontier=True, frontier_radius=0,
-         forward=(1.0, 0.0), escape_radius=0, trail_back=None, max_backtrack=np.inf):
+         forward=(1.0, 0.0), escape_radius=0, trail_back=None, max_backtrack=np.inf,
+         standard_depth=0, depth_coeff=1.2, route_slack=20.0):
     """
     data: HxW int8 occupancy (data[y, x]; -1 bilinmiyor, 0..100 maliyet); +x = ileri.
     start: (x, y) hucre. Mesafeler hucre cinsinden.
@@ -70,6 +78,8 @@ def plan(data, start, *, cost_threshold=99, cost_coeff=8.5, x_coeff=2.0, y_coeff
            hucreler elenir, dar alan manevrasi iz kapaliyla ayni), hicbiri yoksa None + blocked.
       info['trail'] = elenen frontier sayisi, info['backtrack'] = hedef eski izin uzerinde,
       info['backtrack_blocked'] = gidilebilir her yer max_backtrack'ten geride (planner durur).
+    standard_depth (katman, 0 = kapali): adim 6. info['standard'] = B kabul edildi (hedef B, yol
+      Dijkstra'dan B'ye), info['route_goal'] = G (frontier hedefi, debug).
     """
     h, w = data.shape
     sx, sy = start
@@ -81,7 +91,8 @@ def plan(data, start, *, cost_threshold=99, cost_coeff=8.5, x_coeff=2.0, y_coeff
     across = -(xs - sx) * uy + (ys - sy) * ux                   # yanal bileşen
     passable = (data != -1) & (data <= cost_threshold) & (along >= 0)   # yalnizca ust yari
     info = {'frontier': np.zeros((h, w), bool), 'candidates': 0, 'fallback': False, 'escape': False,
-            'trail': 0, 'backtrack': False, 'backtrack_blocked': False}
+            'trail': 0, 'backtrack': False, 'backtrack_blocked': False,
+            'standard': False, 'route_goal': None}
     on_trail = np.isfinite(trail_back) if trail_back is not None else np.zeros((h, w), bool)
     lead = []                                   # kacis: robot -> ilk gecilebilir hucre
     if not passable[sy, sx]:
@@ -160,6 +171,17 @@ def plan(data, start, *, cost_threshold=99, cost_coeff=8.5, x_coeff=2.0, y_coeff
                  - data.ravel()[cand].astype(np.float64) * goal_cost_coeff
                  - (geo.ravel()[cand] - euclid.ravel()[cand]) * detour_coeff)
         best = cand[int(np.argmax(score))]
+        if standard_depth > 0:
+            b = standard_goal(data, passable, (sx, sy), (ux, uy), along, across, standard_depth,
+                              x_coeff, y_coeff, depth_coeff, goal_cost_coeff)
+            if b is not None and b != best and euclid.ravel()[b] >= min_goal_dist:
+                # B -> G mesafesi: ters grafikte G'den Dijkstra
+                to_g = dijkstra(graph.T.tocsr(), indices=int(idx.ravel()[best]))
+                via = geo.ravel()[b] + to_g[idx.ravel()[b]]
+                if via <= geo.ravel()[best] + route_slack:
+                    info['route_goal'] = divmod(int(best), w)[::-1]
+                    info['standard'] = True
+                    best = b
     else:
         # --- 4) En uzun yol: ayni grafik, agirlik = yalnizca adim uzunlugu ----------------------
         info['fallback'] = True
@@ -195,3 +217,48 @@ def plan(data, start, *, cost_threshold=99, cost_coeff=8.5, x_coeff=2.0, y_coeff
         node = int(pred[node])
     path.reverse()
     return (gx, gy), lead + path, info
+
+
+def _shift(m, dx, dy):
+    """m[y, x] -> out[y+dy, x+dx] (kenarda sifir)."""
+    out = np.zeros_like(m)
+    h, w = m.shape
+    out[max(0, dy):h + min(0, dy), max(0, dx):w + min(0, dx)] = \
+        m[max(0, -dy):h - max(0, dy), max(0, -dx):w - max(0, dx)]
+    return out
+
+
+def standard_goal(data, passable, start, forward, along, across, depth, x_coeff, y_coeff,
+                  depth_coeff, goal_cost_coeff):
+    """Standart planner'in BFS hedef secimi (standart_path_planner.grid_callback), vektorel.
+    Robottan ileri (+1 adim) ve iki yana katman katman genisler, depth katman; gecilebilir hucreler.
+    Skor = ileri*x_coeff - |yanal|*y_coeff + katman*depth_coeff - deger*goal_cost_coeff.
+    forward eksene yakin olani: (+-1, 0) ya da (0, +-1). Dondurur: duz indeks ya da None."""
+    sx, sy = start
+    ux, uy = forward
+    if abs(ux) >= abs(uy):
+        moves = [(1 if ux >= 0 else -1, 0), (0, 1), (0, -1)]
+    else:
+        moves = [(0, 1 if uy >= 0 else -1), (1, 0), (-1, 0)]
+    layer = np.full(data.shape, -1, np.int32)
+    cur = np.zeros(data.shape, bool)
+    cur[sy, sx] = True
+    layer[sy, sx] = 0
+    seen = cur.copy()
+    for d in range(1, depth):
+        nxt = np.zeros_like(cur)
+        for dx, dy in moves:
+            nxt |= _shift(cur, dx, dy)
+        nxt &= passable & ~seen
+        if not nxt.any():
+            break
+        layer[nxt] = d
+        seen |= nxt
+        cur = nxt
+    score = (along * x_coeff - np.abs(across) * y_coeff + layer * depth_coeff
+             - np.where(data < 0, 0, data).astype(np.float64) * goal_cost_coeff)
+    score[~seen] = -np.inf
+    score[sy, sx] = -np.inf
+    if not np.isfinite(score).any():
+        return None
+    return int(np.argmax(score))

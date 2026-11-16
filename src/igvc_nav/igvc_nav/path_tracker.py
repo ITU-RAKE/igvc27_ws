@@ -21,6 +21,11 @@ Kontrol: dinamik lookahead'li pure pursuit (ayrintilar igvc_nav/tracker_core.py)
   - Geri vites yalnizca yol geldigi anda tamamen aracin arkasindaysa (planner'in RECOVERY yolu);
     ileri bir yolun hedefi arac donerken arkada kalirsa yerinde doner.
 
+Standart nav modu (standart_mode; varsayilan planner'in standart_mode'unu izler): standart tracker'in
+  sade pure pursuit yasasi (sabit standart_lookahead_dist 0.8 m ya da standart_dynamic_lookahead ile
+  hiza bagli), tepe hizi standart_max_linear_speed (1.0, standart tracker'daki gibi). kp, min hiz,
+  max acisal hiz, slowdown_yaw_error ortak. Geri vites kurali (yalnizca RECOVERY yolu) korunur.
+
 Kaldirilanlar: rake_core (Node/config/sistem durumu), durum makinesi modlari (hizalama, su,
 cakil, yan egim) ve /mission_control/is_aligned.
 Eklenen guvenlik: path_timeout boyunca yeni yol gelmezse ya da odom yoksa durur.
@@ -36,7 +41,9 @@ from rcl_interfaces.msg import SetParametersResult
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 
-from igvc_nav.tracker_core import compute_command, is_recovery_path
+from rcl_interfaces.msg import ParameterEvent
+
+from igvc_nav.tracker_core import compute_command, compute_command_standard, is_recovery_path
 
 
 class PathTracker(Node):
@@ -89,6 +96,27 @@ class PathTracker(Node):
             clearance_window=f("clearance_window_m", 1.5),          # m: ileride bakilan yol
             clearance_power=f("clearance_power", 1.0),              # >1: yalnizca engele cok yakinken
         )
+        # Standart nav modu: standart tracker'in kontrol yasasi (tracker_core.compute_command_standard).
+        # follow_planner_mode=true: planner'in standart_mode parametresini izler, tek komut ikisini birden
+        # acar/kapatir:  ros2 param set /path_planner standart_mode true
+        self.standart_mode = bool(p("standart_mode", False).value)
+        self.follow_planner = bool(p("follow_planner_mode", True).value)
+        self.planner_node = p("planner_node", "/path_planner").value
+        self.std_keys = {
+            "standart_max_linear_speed": "max_v",           # standart tracker'in tepe hizi
+            "standart_lookahead_dist": "lookahead",         # sabit lookahead (standart)
+            "standart_lookahead_min": "lookahead_min",      # dinamik: min + time * hiz, en fazla max
+            "standart_lookahead_max": "lookahead_max",
+            "standart_lookahead_time": "lookahead_time",
+        }
+        self.std_prm = dict(
+            max_v=f("standart_max_linear_speed", 1.0),
+            lookahead=f("standart_lookahead_dist", 0.8),
+            dynamic_lookahead=bool(p("standart_dynamic_lookahead", False).value),
+            lookahead_min=f("standart_lookahead_min", 0.5),
+            lookahead_max=f("standart_lookahead_max", 1.2),
+            lookahead_time=f("standart_lookahead_time", 0.5),
+        )
         self.path_timeout = float(p("path_timeout", 1.0).value)          # s
         rate = float(p("control_rate", 20.0).value)                      # Hz
         # Yol bu cercevelerden birinde gelirse yerel sayilir (araca bagli)
@@ -109,19 +137,44 @@ class PathTracker(Node):
         self.cmd_pub = self.create_publisher(Twist, cmd_topic, 10)
         self.create_timer(1.0 / rate, self.control_loop)
         self.add_on_set_parameters_callback(self.on_params)
+        self.create_subscription(ParameterEvent, "/parameter_events", self.param_event_callback, 10)
         self.get_logger().info(
             f"Path tracker (pure pursuit): {path_topic} + {odom_topic} -> {cmd_topic} | "
             f"lookahead {self.prm['lookahead_min']}..{self.prm['lookahead_max']} m (dinamik), "
-            f"kp {self.prm['kp']}, v {self.prm['min_v']}..{self.prm['max_v']} m/s")
+            f"kp {self.prm['kp']}, v {self.prm['min_v']}..{self.prm['max_v']} m/s | "
+            f"standart mod {'ACIK' if self.standart_mode else 'KAPALI'}")
 
     def on_params(self, params):
         """Kontrol parametreleri calisirken degistirilebilir (ros2 param set)."""
         for prm in params:
+            if prm.name == "standart_mode":
+                self.set_standart(bool(prm.value))
+            elif prm.name == "follow_planner_mode":
+                self.follow_planner = bool(prm.value)
+            elif prm.name == "standart_dynamic_lookahead":
+                self.std_prm["dynamic_lookahead"] = bool(prm.value)
+                self.get_logger().info(f"standart dinamik lookahead {'ACIK' if prm.value else 'KAPALI'}")
+            elif prm.name in self.std_keys:
+                self.std_prm[self.std_keys[prm.name]] = float(prm.value)
+                self.get_logger().info(f"{prm.name} = {float(prm.value):g}")
             key = self.param_keys.get(prm.name)
             if key is not None:
                 self.prm[key] = float(prm.value)
                 self.get_logger().info(f"{prm.name} = {float(prm.value):g}")
         return SetParametersResult(successful=True)
+
+    def set_standart(self, on):
+        if on != self.standart_mode:
+            self.get_logger().info("Standart nav modu " + ("ACIK" if on else "KAPALI"))
+        self.standart_mode = on
+
+    def param_event_callback(self, msg):
+        """Planner'in standart_mode degisikligini izle (follow_planner_mode)."""
+        if not self.follow_planner or msg.node != self.planner_node:
+            return
+        for prm in list(msg.new_parameters) + list(msg.changed_parameters):
+            if prm.name == "standart_mode":
+                self.set_standart(bool(prm.value.bool_value))
 
     # ------------------------------------------------------------------ girdiler
     def odom_callback(self, msg):
@@ -167,9 +220,16 @@ class PathTracker(Node):
             self.stop_robot()
             return
 
-        v, w, info = compute_command(self.global_path, (self.robot_x, self.robot_y, self.robot_yaw),
-                                     self.robot_speed, self.prm, reverse=self.reverse,
-                                     costs=self.path_costs)
+        pose = (self.robot_x, self.robot_y, self.robot_yaw)
+        if self.standart_mode:
+            prm = dict(kp=self.prm["kp"], min_v=self.prm["min_v"], max_w=self.prm["max_w"],
+                       slowdown_yaw_error=self.prm["slowdown_yaw_error"],
+                       closest_search=self.prm["closest_search"], **self.std_prm)
+            v, w, info = compute_command_standard(self.global_path, pose, self.robot_speed, prm,
+                                                  reverse=self.reverse)
+        else:
+            v, w, info = compute_command(self.global_path, pose, self.robot_speed, self.prm,
+                                         reverse=self.reverse, costs=self.path_costs)
         twist = Twist()
         twist.linear.x, twist.angular.z = float(v), float(w)
         self.cmd_pub.publish(twist)
