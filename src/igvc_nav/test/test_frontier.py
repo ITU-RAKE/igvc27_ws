@@ -204,3 +204,52 @@ def test_fallback_ignores_recent_trail_fold():
     tb = np.full((N, N), np.inf)
     tb[60:150, 150:200] = 60.0                     # katlanan iz, 3 m geride
     assert plan(g, (C, C))[0] == plan(g, (C, C), trail_back=tb)[0]
+
+
+# ---------------------------------------------------------------- standart nav modu (adim 6)
+STD = dict(standard_depth=70, route_slack=20, frontier_radius=R - 2)
+
+
+def lane_with_barrel(bx):
+    """3 m serit (y 90..150), ortada bx hucre ileride duba."""
+    return world([(0, 88, 239, 90), (0, 150, 239, 152), (bx - 6, C - 5, bx + 6, C + 7)])
+
+
+def lateral_at(path, x):
+    return next(abs(py - C) for px, py in path if px >= x)
+
+
+def test_standard_off_is_unchanged():
+    g = lane_with_barrel(C + 60)
+    a = plan(g, (C, C), frontier_radius=R - 2)
+    b = plan(g, (C, C), frontier_radius=R - 2, standard_depth=0)
+    assert a[0] == b[0] and a[1] == b[1] and not b[2]['standard']
+
+
+def test_standard_goal_used_on_route():
+    g = lane_with_barrel(C + 60)                  # duba 3 m onde
+    goal0, path0, _ = plan(g, (C, C), frontier_radius=R - 2)
+    goal, path, info = plan(g, (C, C), **STD)
+    assert info['standard'] and info['route_goal'] == goal0
+    assert goal[0] < goal0[0]                     # standart hedef daha yakin (BFS derinligi)
+    assert g[goal[1], goal[0]] <= 99 and path[-1] == goal
+
+
+def test_standard_goal_in_pocket_is_rejected():
+    """Duz ileride sonu kapali cep, gercek yol sola kol: dogrulamasiz standart BFS cebe gider."""
+    walls = [(0, 88, 216, 90), (214, 88, 216, 152),            # sag cizgi + 4.7 m'de duvar (cep)
+             (0, 150, 135, 152),                                # sol cizgi 0.75 m'de biter
+             (135, 150, 137, 239), (160, 150, 162, 239), (160, 150, 216, 152)]   # sola kol
+    g = world(walls)
+    goal0, _, _ = plan(g, (C, C), frontier_radius=R - 2)
+    goal, _, info = plan(g, (C, C), **STD)
+    assert goal0[1] > 150, f'frontier hedefi sol kolda olmali: {goal0}'
+    assert not info['standard'] and goal == goal0     # dogrulamasiz standart BFS (185, 119): cepte
+
+
+def test_standard_not_used_in_fallback():
+    g = world(POCKET, inflate=30)                 # sisirme seridi kapatir -> fallback
+    goal0, path0, i0 = plan(g, (C, C))
+    goal, path, info = plan(g, (C, C), standard_depth=70)
+    if i0['fallback']:
+        assert not info['standard'] and goal == goal0

@@ -39,7 +39,11 @@ Yayinlar:
   /igvc_nav/debug_image   (sensor_msgs/Image, bgr8; + /compressed) yukari = aracin onu.
       beyaz bos, gri tonlari maliyet (koyu = pahali), siyah gecilemez, koyu gri bilinmiyor,
       yesil yol, kirmizi hedef, mavi baslangic, turuncu frontier adaylari, camgobegi "ileri" yonu,
-      mor cizgi gidilen iz, acik mor koridor (hedef olamaz), koyu mor izde elenen frontier'ler.
+      mor cizgi gidilen iz, acik mor koridor (hedef olamaz), koyu mor izde elenen frontier'ler,
+      sari frontier hedefi (standart modda kirmizi = standart BFS hedefi).
+
+Standart nav modu (standart_mode, varsayilan kapali; frontier.py adim 6): yon frontier + izden,
+  yaklasma standart planner'dan (BFS hedefi + agirlikli A*). path_tracker ayni anahtari izler.
 """
 import array
 import math
@@ -138,6 +142,17 @@ class PathPlanner(Node):
         self.trail_turn_after_s = float(p("trail_turn_after_s", 2.0).value)
         self.no_goal_since = None
         self.trail_step_m = 0.25
+        # Standart nav modu (standart_path_planner'in engele yaklasma davranisi). Hedefin YONU yine
+        # frontier + iz katmanindan (cep, iz, arkaya donme, geri gidis siniri degismez); onun ustune
+        # standart BFS hedefi (goal_search_depth, x/y/depth/goal_selection katsayilari) secilir ve yol
+        # standart agirlikli A* ile cizilir: engel gorundugu an hedef engelin yanina kayar, erken ve
+        # yumusak doner. BFS hedefi frontier hedefine giden rotadan standart_route_slack_m'den fazla
+        # saptiriyorsa (cep / ters yon) kullanilmaz, normal yol kalir. Calisirken:
+        #   ros2 param set /path_planner standart_mode true   (path_tracker da otomatik gecer)
+        self.standart_mode = bool(p("standart_mode", False).value)
+        self.standart_route_slack_m = float(p("standart_route_slack_m", 1.0).value)
+        self.standard_active = False         # son haritada standart hedef kullanildi
+        self.route_goal = None               # debug: frontier hedefi (standart modda)
         self.trail = []                      # [(x, y, s)] odom; s = kumulatif mesafe
         self.trail_back = None               # son haritanin koridor rasteri (debug icin de)
         self.trail_pixels = None             # debug: izin hucre koordinatlari (tamami)
@@ -236,6 +251,8 @@ class PathPlanner(Node):
         cv2.circle(debug_img, start, 2, (255, 0, 0), -1)
         if goal is not None:
             cv2.circle(debug_img, (goal[0], goal[1]), 2, (0, 0, 255), -1)
+        if self.route_goal is not None:                       # sari: frontier hedefi (standart mod)
+            cv2.circle(debug_img, tuple(int(v) for v in self.route_goal), 2, (0, 255, 255), -1)
         if path is not None and len(path) > 1:
             cv2.polylines(debug_img, [np.asarray(path, np.int32).reshape(-1, 1, 2)], False,
                           (0, 200, 0), 1)
@@ -417,7 +434,16 @@ class PathPlanner(Node):
             return
 
         goal = self.best_pos
-        path = self.frontier_path if self.frontier_path is not None else self.find_path(start, goal)
+        if self.standard_active:
+            # Standart mod: standart A* (agirlikli sezgisel) BFS hedefine. max_iters'ta hedefe
+            # ulasamazsa standart gibi hedefe en yakin dugume kadarki kismi yol (erken donusu tasir);
+            # o da 1 m'den kisaysa frontier Dijkstra'sinin ayni hedefe yolu.
+            path = self.find_path(start, goal)
+            short = path is None or len(path) * max(self.costmap.resolution, 1e-3) < 1.0
+            if not self.astar_reached and short and self.frontier_path is not None:
+                path = self.frontier_path
+        else:
+            path = self.frontier_path if self.frontier_path is not None else self.find_path(start, goal)
         path_length = len(path) if path is not None else 0
 
         self.publish_path_debug(self.path_debug_img(path, goal))
@@ -472,6 +498,7 @@ class PathPlanner(Node):
         # Çevre değerlendirmesi (hedef seçimi) her zaman yapılmalı
         self.frontier_path = None
         self.frontier_cells = None
+        self.standard_active, self.route_goal = False, None
         self.fwd = self.forward_vector()
         if self.goal_mode == "frontier" and self.planner_mode == "normal" and self.select_frontier_goal():
             return
@@ -524,7 +551,7 @@ class PathPlanner(Node):
             self.goal_pub.publish(goal_point)
 
     def on_params(self, params):
-        """Calisirken degistirilebilen: use_frontier, trail_*."""
+        """Calisirken degistirilebilen: use_frontier, trail_*, standart_mode, standart_route_slack_m."""
         for prm in params:
             if prm.name == "use_frontier":
                 self.use_frontier = bool(prm.value)
@@ -533,6 +560,11 @@ class PathPlanner(Node):
             elif prm.name == "trail_enable":
                 self.trail_enable = bool(prm.value)
                 self.get_logger().info("Iz hafizasi " + ("ACIK" if self.trail_enable else "KAPALI"))
+            elif prm.name == "standart_mode":
+                self.standart_mode = bool(prm.value)
+                self.get_logger().info("Standart nav modu " + ("ACIK" if self.standart_mode else "KAPALI"))
+            elif prm.name == "standart_route_slack_m":
+                self.standart_route_slack_m = float(prm.value)
             elif prm.name in ("trail_radius_m", "trail_length_m", "trail_recent_m",
                               "trail_max_backtrack_m", "trail_turn_after_s"):
                 setattr(self, prm.name, float(prm.value))
@@ -646,7 +678,9 @@ class PathPlanner(Node):
                 fallback_max_cost=self.fallback_max_cost, use_frontier=self.use_frontier,
                 frontier_radius=self.plan_radius_m / res if self.plan_radius_m > 0 else 0,
                 forward=fwd, escape_radius=int(round(self.escape_radius_m / res)),
-                trail_back=self.trail_back, max_backtrack=self.trail_max_backtrack_m / res)
+                trail_back=self.trail_back, max_backtrack=self.trail_max_backtrack_m / res,
+                standard_depth=self.goal_search_depth if self.standart_mode else 0,
+                depth_coeff=self.depth_coeff, route_slack=self.standart_route_slack_m / res)
 
         goal, path, info = run(self.fwd)
         now = self.get_clock().now().nanoseconds * 1e-9
@@ -695,6 +729,7 @@ class PathPlanner(Node):
             self.get_logger().info("Ust yarida sinira ulasan yol yok: en uzun yolun ucuna gidiliyor",
                                    throttle_duration_sec=2.0)
         self.best_pos, self.best_score, self.frontier_path = goal, None, path
+        self.standard_active, self.route_goal = info["standard"], info["route_goal"]
         goal_point = self.get_goal_point()
         if goal_point is not None:
             self.goal_pub.publish(goal_point)
@@ -713,6 +748,7 @@ class PathPlanner(Node):
             cost_val = val if val != -1 else 0
             return 1.0 + (cost_val * self.path_find_cost_coeff / 100.0)
 
+        self.astar_reached = False
         g_score = {start: 0}
         open_heap = [(h(start), start)]
         open_set = {start}
@@ -736,6 +772,7 @@ class PathPlanner(Node):
                 closest_node = current
 
             if abs(current[0] - goal[0]) < 2 and abs(current[1] - goal[1]) < 2:
+                self.astar_reached = True
                 return self.recreate_path(came_from, current)
 
             closed_set.add(current)
