@@ -3,7 +3,7 @@ surround_view_node:
     # NOT: Geometri (image_width/height, <kamera>.pose, <kamera>.intrinsics, vehicle.*,
     # frame_id) surround_view.launch.py tarafindan igvc_macros.xacro'dan hesaplanip bu
     # dosyanin uzerine yazilir. Burada yalnizca geometri disi ayarlar var.
-    rate_hz: 20.0
+    rate_hz: 30.0              # ust sinir; dongu yeni on kamera karesiyle tetiklenir
 
     # BEV: 10 m x 10 m, 2 cm/px -> 500x500, base_footprint merkezde
     bev_size_m: 10.0
@@ -22,7 +22,7 @@ surround_view_node:
     # Yalnizca abone varken uretilir.
     publish_raw_homo: true     # igvc_vision/merged_image_homo (bgr8, 500x500)
     publish_raw_merged: true   # igvc_vision/merged_image (bgr8, 4 ham goruntu mozaigi)
-    merged_raw_scale: 0.4      # ham mozaik olcegi (tam boy 2988x2988 ~27 MB/kare)
+    merged_raw_scale: 0.4      # ham mozaik olcegi (640x427 kamerayla tam boy 1494x1494 ~6.7 MB/kare)
     # rqt/RViz'de /compressed yerine bu ham topic'leri sec: rqt_image_view acilista
     # kayitli '/compressed' secimini bazen ham topic sanip tip hatasiyla cokuyor.
 

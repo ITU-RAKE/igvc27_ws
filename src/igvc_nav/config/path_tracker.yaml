@@ -1,0 +1,31 @@
+# path_tracker hiz/kontrol ayarlari (igvc_nav.launch.py ve local_nav.launch.py yukler).
+# Calisirken denemek: ros2 param set /path_tracker <ad> <deger>   (kalici icin buraya yaz)
+#
+# Asagidaki degerler KARARLI ayar (igvc_course_2: ~250 s tur, duba temasi yok, RECOVERY yok).
+# 2026-11-16 hiz denemeleri (sim, tam tur): bkz. "denendi" notlari. Hizli setler (tepe 1.5 m/s,
+# viraj ivmesi 0.9-1.5) turu 212-224 s'ye indirdi ama sik duba bolumunde (x 5-7, y -13) dubalara
+# siyirdi; bu parkurdaki ~1.1 m duba araliklari (arac 0.79 m) hiz payi birakmiyor.
+path_tracker:
+  ros__parameters:
+    # --- hiz sinirlari ---
+    max_linear_speed: 1.5        # m/s  gercek aracin tepe hizi (eski kararli: 1.0)
+    min_linear_speed: 0.1        # m/s
+    max_angular_speed: 2.0       # rad/s; fiziksel tavan ~4.1 (1.5 m/s tekerlek, 0.73 m iz), skid kaymasiyla 2-3.4
+    # --- viraj / donus yavaslamasi ---
+    max_lateral_accel: 0.5       # m/s^2 viraj hiz siniri: v <= sqrt(bu / egrilik)  (0.9-1.5 denendi: temas)
+    slowdown_yaw_error: 0.8      # rad   yon hatasi bu kadarsa hiz min'e iner (1.0 denendi: dar gecitte takildi)
+    turn_slowdown: 0.5           # 0-1   acisal hiz verirken ek yavaslama (0.35 denendi: dar gecitte takildi)
+    in_place_yaw_error: 1.2      # rad   ustunde yerinde doner
+    # --- yonelim ---
+    kp_angular: 1.0              # 1.3 denendi: yuksek hizda yon salinimi, arac seride dik kalip takildi
+    # --- lookahead ---
+    lookahead_min: 0.35          # m
+    lookahead_max: 1.0           # m     (hiz 1.5 ise 1.3 yap: 0.35 + 0.6*1.5)
+    lookahead_time: 0.6          # s     lookahead = min + bu * hiz
+    lookahead_curvature_factor: 0.5
+    curvature_window_m: 1.2
+    path_smoothing_m: 0.25
+    # --- engele yakinlik (yeni ozellik, varsayilan kapali) ---
+    clearance_slowdown: 0.0      # 0-1: ileride yol sisirme bolgesinden geciyorsa yavasla (hizli setlerde 0.6-1.0)
+    clearance_window_m: 1.5      # m
+    clearance_power: 1.0         # >1: orta maliyette az, oldurucu sinira yakin cok yavaslar

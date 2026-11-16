@@ -4,7 +4,7 @@ Gazebo (igvc_course.world, robot + ros2_control), RViz (yeni_config.rviz), skid 
 EKF lokalizasyonu (igvc_localization) baslatir.
 Argumanlar: world:=<dosya> rviz:=false gui:=false rviz_config:=<dosya> x:= y:= yaw:= ekf:=false
 Baska dunya: world:=<tam yol> (orn. .../worlds/parkur.world). x/y/yaw:=auto (varsayilan):
-igvc_course.world'de parkurun dogma noktasi (rampanin ilerisi, kuzeye), diger dunyalarda 0.
+igvc_course*.world'de parkurun dogma noktasi (baslangic cizgisinin onu, kuzeye), diger dunyalarda 0.
 Surmek icin ayri terminalde: ros2 run igvc_controller keyboard_controller
 """
 import os
@@ -37,7 +37,7 @@ def generate_launch_description():
     ekf = LaunchConfiguration('ekf')
 
     # Varsayilan: IGVC Auto-Nav benzeri parkur (baslangic cizgisi orijinde, kuzeye bakar -> yaw 90 deg)
-    course = os.path.join(desc_share, 'worlds', 'igvc_course.world')
+    course = os.path.join(desc_share, 'worlds', 'igvc_course_2.world')
     default_world = course if os.path.exists(course) else os.path.join(desc_share, 'worlds', 'empty.world')
     notes = [] if os.path.exists(course) else [LogInfo(msg=(
         'igvc_course.world bulunamadi (colcon build alin) -> empty.world'))]
@@ -51,7 +51,8 @@ def generate_launch_description():
     for i, k in enumerate(('x', 'y', 'yaw')):
         v = LaunchConfiguration(k)
         gz_args[k] = PythonExpression([
-            f"('{course_spawn[i]}' if 'igvc_course.world' in '", world, "' else '0.0') if '",
+            # igvc_course.world ve igvc_course_2.world (ayni parkur modeli) -> parkur dogma noktasi
+            f"('{course_spawn[i]}' if '", world, "'.split('/')[-1].startswith('igvc_course') else '0.0') if '",
             v, "' == 'auto' else '", v, "'"])
     return LaunchDescription([
         DeclareLaunchArgument('world', default_value=default_world),
