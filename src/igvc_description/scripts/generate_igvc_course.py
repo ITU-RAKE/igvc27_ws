@@ -4,6 +4,7 @@ IGVC Auto-Nav benzeri parkur zemini: asfalt + beyaz serit cizgileri dokusu ve on
 
 Uretir (models/igvc_course/):
   materials/textures/course.png  asfalt + 3" beyaz cizgiler (+ opsiyonel cukurlar)
+  materials/textures/course_2.png, meshes/course_2.dae  ayni parkur, baslangic cizgisi yok (igvc_course_2.world)
   meshes/course.dae              doku bir kez oturtulmus tek yuzlu zemin (dunya olcusunde)
   course.yaml                    cizgilerin dunya koordinatlari (dogrulama / ileride kullanim)
 
@@ -286,6 +287,11 @@ def main():
     y0, y1 = COURSE['y_range']
     with open(os.path.join(out, 'meshes/course.dae'), 'w') as f:
         f.write(DAE.format(x0=x0, x1=x1, y0=y0, y1=y1))
+    # igvc_course_2.world varyanti: ayni parkur (ayni gurultu tohumu), baslangic cizgisi yok.
+    img2, _, _ = build(dict(COURSE, start_line=False))
+    cv2.imwrite(os.path.join(out, 'materials/textures/course_2.png'), img2)
+    with open(os.path.join(out, 'meshes/course_2.dae'), 'w') as f:
+        f.write(DAE.format(x0=x0, x1=x1, y0=y0, y1=y1).replace('textures/course.png', 'textures/course_2.png'))
     with open(os.path.join(out, 'model.config'), 'w') as f:
         f.write(MODEL_CONFIG)
     with open(os.path.join(out, 'model.sdf'), 'w') as f:
