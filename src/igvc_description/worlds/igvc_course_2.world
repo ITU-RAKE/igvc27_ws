@@ -63,7 +63,7 @@
           <cast_shadows>0</cast_shadows>
           <geometry>
             <mesh>
-              <uri>model://igvc_course/meshes/course.dae</uri>
+              <uri>model://igvc_course/meshes/course_2.dae</uri>
             </mesh>
           </geometry>
         </visual>
