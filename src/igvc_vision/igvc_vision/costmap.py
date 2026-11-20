@@ -29,8 +29,11 @@ import numpy as np
 LETHAL = 100
 
 
-def inflate(grid, resolution, lethal_radius, inflation_radius, profile='linear'):
-    """grid: (H, W) int8 (-1 / 0 / 100). Donus: ayni boyutta int8 maliyet haritasi."""
+def inflate(grid, resolution, lethal_radius, inflation_radius, profile='linear', unknown_cost=True):
+    """grid: (H, W) int8 (-1 / 0 / 100). Donus: ayni boyutta int8 maliyet haritasi.
+    unknown_cost=False: bilinmeyen (-1) hucrelere yalnizca oldurucu (100) yazilir, gecilebilir maliyet
+    (1..99) yazilmaz -> bilinmeyen kalir. True (eski): bilinmeyen hucreler de sisirme maliyeti alir; lidar
+    golgesinin icindeki sisirme halkasi boylece gecilebilir olup planner golgenin icinden yol cizebiliyordu."""
     if lethal_radius <= 0 and inflation_radius <= 0:
         return grid
     obstacles = grid >= LETHAL
@@ -54,9 +57,46 @@ def inflate(grid, resolution, lethal_radius, inflation_radius, profile='linear')
     # Yalnizca sisirme bolgesinde ve maliyeti artiriyorsa yaz. (cost > 0 sart: aksi halde
     # bolge disindaki bilinmeyen -1 hucreler 0 > -1 diye "bos" olurdu.)
     m = (cost > 0) & (cost > out)
+    if not unknown_cost:
+        m &= (grid != -1) | (cost >= LETHAL)
     out[m] = cost[m]
     return out
 
+
+
+def remove_thin_free(grid, min_width=3):
+    """Bilinmeyene (-1) komsu, min_width hucreden INCE gecilebilir (0..99) seritleri bilinmeyen yapar.
+
+    Lidar golgesinin kenari (kutupsal donusum yuvarlamasi) ile engelin sisirme bandi arasinda 1-2
+    hucrelik, kamera "bos" dedigi icin bos kalan seritler oluyordu; planner bilinmeyeni gecilemez sayar
+    ama ona yaklasmayi cezalandirmaz, bu seritten (golge ile serit cizgisi arasindan) yol cizebiliyordu.
+    Bos (0) kadar dusuk maliyetli (1..99) hucreler de sayilir: golge kenari ile oldurucu bolge arasinda kalan
+    birkac bilinen maliyet hucresi de ayni sekilde ince bir gecit olusturuyordu. Oldurucu (100) degismez.
+    Ince hucreler: min_width x min_width acmada (opening) kaybolanlar. Bunlarin bagli parcalarindan
+    bilinmeyene degenler BUTUNUYLE bilinmeyen olur (yalniz degen sutunu silmek 2 hucrelik seritten yine
+    1 hucre birakirdi). Genis bos alanlar, maliyetli / dolu hucreler ve bilinmeyene degmeyen ince bosluklar
+    (iki engelin sisirmesi arasi) degismez. Sisirmeden SONRA cagrilir (bos = sisirme bandinin disi)."""
+    if min_width < 2:
+        return grid
+    free = ((grid >= 0) & (grid < 100)).astype(np.uint8)        # gecilebilir
+    unknown = grid == -1
+    if not free.any() or not unknown.any():
+        return grid
+    opened = cv2.morphologyEx(free, cv2.MORPH_OPEN, np.ones((min_width, min_width), np.uint8))
+    thin = (free == 1) & (opened == 0)
+    if not thin.any():
+        return grid
+    n, lab = cv2.connectedComponents(thin.astype(np.uint8), connectivity=8)
+    touch = cv2.dilate(unknown.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
+    hit = np.zeros(n, bool)
+    hit[np.unique(lab[thin & touch])] = True
+    hit[0] = False
+    m = hit[lab]
+    if not m.any():
+        return grid
+    out = grid.copy()
+    out[m] = -1
+    return out
 
 def shadow_mask(occupied, margin_cells=2, n_angles=720):
     """

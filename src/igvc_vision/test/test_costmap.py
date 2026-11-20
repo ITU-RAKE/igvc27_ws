@@ -78,3 +78,53 @@ def test_shadow_behind_obstacle_only():
     assert not sh[50, 60] and not sh[50, 30]                  # onu, ters yon
     assert not sh[20, 85] and not sh[80, 85]                  # yanlar
     assert not shadow_mask(np.zeros((101, 101), bool)).any()
+
+
+# ---------------------------------------------------------------- golgede bilinmeyen kalsin
+from igvc_vision.costmap import remove_thin_free  # noqa: E402
+
+
+def test_unknown_cost_false_keeps_unknown_except_lethal():
+    g = np.full((40, 40), -1, np.int8)
+    g[:, :20] = 0                                    # sol yari bilinen bos, sag yari bilinmiyor (golge)
+    g[20, 19] = 100                                  # engel bilinenin kenarinda
+    old = inflate(g, 0.05, 0.2, 0.5)                 # eski: bilinmeyen de maliyet alir
+    new = inflate(g, 0.05, 0.2, 0.5, unknown_cost=False)
+    right = np.zeros_like(g, bool); right[:, 20:] = True
+    assert ((old > 0) & (old < 100) & right).any()                 # eski: golgede gecilebilir halka
+    assert not ((new >= 0) & (new < 100) & right).any()            # yeni: golgede yalnizca -1 / 100
+    np.testing.assert_array_equal(old == 100, new == 100)          # oldurucu bolge ayni
+    np.testing.assert_array_equal(old[:, :20], new[:, :20])        # bilinen tarafta degisiklik yok
+
+
+def test_remove_thin_free_strips_next_to_unknown():
+    g = np.full((30, 30), 0, np.int8)                # genis bos alan
+    g[:, 20:] = -1                                   # bilinmeyen (golge)
+    g[:, 17] = 100                                   # engel (sisirilmis bant temsili)
+    g[5:25, 18:20] = 0                               # engel ile golge arasinda 2 hucrelik bos serit
+    g[:5, 18:20] = 100; g[25:, 18:20] = 100
+    out = remove_thin_free(g, 3)
+    assert (out[5:25, 18:20] == -1).all()            # serit butunuyle bilinmeyen (2 sutun da)
+    np.testing.assert_array_equal(out[:, :17], g[:, :17])   # genis bos alan aynen
+    assert (out == 100).sum() == (g == 100).sum()
+
+
+def test_remove_thin_free_keeps_gaps_away_from_unknown():
+    g = np.full((20, 20), 0, np.int8)
+    g[:, 8] = 100; g[:, 10] = 100                    # iki engel arasinda 1 hucrelik bosluk, bilinmeyen yok
+    np.testing.assert_array_equal(remove_thin_free(g, 3), g)
+    g2 = g.copy(); g2[0:2, 0:2] = -1                 # uzakta bilinmeyen var ama bosluga degmiyor
+    np.testing.assert_array_equal(remove_thin_free(g2, 3)[:, 9], g2[:, 9])
+
+
+
+def test_remove_thin_free_also_thin_cost_cells():
+    """Golge kenari ile oldurucu arasinda kalan ince MALIYETLI (1..99) serit de bilinmeyen olur."""
+    g = np.full((30, 30), 0, np.int8)
+    g[:, 20:] = -1
+    g[:, 17] = 100
+    g[5:25, 18:20] = 40                              # bilinen ama ince (2 hucre) maliyet seridi, golgeye degiyor
+    g[:5, 18:20] = 100; g[25:, 18:20] = 100
+    out = remove_thin_free(g, 3)
+    assert (out[5:25, 18:20] == -1).all() and (out == 100).sum() == (g == 100).sum()
+    np.testing.assert_array_equal(out[:, :17], g[:, :17])
