@@ -167,11 +167,75 @@ def _ray_hits_convex(origin, dirs, normals, h):
     return tmax >= tmin
 
 
-def project_ground(X, Y, K, dist, pose, img_w, img_h, body=None, min_depth=0.05):
+DIST_MODELS = ("plumb_bob", "rational_polynomial", "equidistant")
+
+
+def distort_normalized(xn, yn, dist, model="plumb_bob"):
+    """Ideal normalize koordinat (x/z, y/z) -> distorsiyonlu normalize koordinat.
+    OpenCV ile ayni modeller (ROS camera_info distortion_model adlari):
+      plumb_bob           k1 k2 p1 p2 k3            (cv2.projectPoints, 5)
+      rational_polynomial k1 k2 p1 p2 k3 k4 k5 k6   (cv2.projectPoints, 8)
+      equidistant         k1 k2 k3 k4               (cv2.fisheye.projectPoints)"""
+    d = [float(c) for c in dist]
+    if model == "equidistant":
+        k1, k2, k3, k4 = (d + [0.0] * 4)[:4]
+        r = np.hypot(xn, yn)
+        th = np.arctan(r)
+        th2 = th * th
+        thd = th * (1 + th2 * (k1 + th2 * (k2 + th2 * (k3 + th2 * k4))))
+        with np.errstate(divide="ignore", invalid="ignore"):
+            s = np.where(r > 1e-12, thd / r, 1.0)
+        return xn * s, yn * s
+    if model not in ("plumb_bob", "rational_polynomial"):
+        raise ValueError(f"Bilinmeyen distorsiyon modeli: {model}")
+    k1, k2, p1, p2, k3, k4, k5, k6 = (d + [0.0] * 8)[:8]
+    r2 = xn * xn + yn * yn
+    rad = 1 + k1 * r2 + k2 * r2 * r2 + k3 * r2 ** 3
+    if model == "rational_polynomial":
+        rad = rad / (1 + k4 * r2 + k5 * r2 * r2 + k6 * r2 ** 3)
+    xd = xn * rad + 2 * p1 * xn * yn + p2 * (r2 + 2 * xn * xn)
+    yd = yn * rad + p1 * (r2 + 2 * yn * yn) + 2 * p2 * xn * yn
+    return xd, yd
+
+
+def is_ideal_pinhole(dist, model="plumb_bob"):
+    """Distorsiyonsuz mu? (equidistant sifir katsayida bile pinhole DEGILDIR: r = f*theta)"""
+    return model != "equidistant" and not any(abs(float(c)) > 0 for c in dist)
+
+
+def max_field_angle(K, dist, model, img_w, img_h, n=64):
+    """Goruntunun kenarlarindaki piksellerin optik eksenle yaptigi en buyuk aci [rad].
+    Distorsiyon polinomu FOV disinda katlanip uzak noktalari goruntuye geri dusurebilir;
+    bu acidan buyuk isinlar gecersiz sayilir. Kenar pikselleri OpenCV ile ters cevrilir."""
+    t = np.linspace(0.0, 1.0, n)
+    W, H = img_w - 1.0, img_h - 1.0
+    border = np.concatenate([np.c_[t * W, 0 * t], np.c_[t * W, 0 * t + H],
+                             np.c_[0 * t, t * H], np.c_[0 * t + W, t * H]])
+    pts = border.reshape(-1, 1, 2).astype(np.float64)
+    D = np.array(dist, np.float64)
+    if model == "equidistant":
+        und = cv2.fisheye.undistortPoints(pts, K, D[:4])
+    else:
+        crit = (cv2.TERM_CRITERIA_COUNT | cv2.TERM_CRITERIA_EPS, 200, 1e-12)
+        und = cv2.undistortPointsIter(pts, K, D, None, None, crit)
+    und = und.reshape(-1, 2)
+    # Ters cevirmenin dogrulugunu kontrol et (yakinsamadiysa daha dar, guvenli aciya dus)
+    xd, yd = distort_normalized(und[:, 0], und[:, 1], dist, model)
+    err = np.hypot(K[0, 0] * xd + K[0, 2] - border[:, 0], K[1, 1] * yd + K[1, 2] - border[:, 1])
+    th = np.arctan(np.hypot(und[:, 0], und[:, 1]))
+    ok = err < 0.5
+    if not ok.any():
+        raise ValueError("Distorsiyon modeli goruntu kenarinda ters cevrilemiyor (katsayilari kontrol et)")
+    return float(th[ok].max())
+
+
+def project_ground(X, Y, K, dist, pose, img_w, img_h, body=None, min_depth=0.05,
+                   model="plumb_bob"):
     """
     Zemin noktalarını kameraya izdüşürür.
     Dönüş: u, v (distorsiyonlu piksel) ve valid (kameranın gerçekten gördüğü noktalar).
     body: {'convex': [(normaller, h), ...]} kamerayi kapatan cisimler (veya None)
+    model: distorsiyon modeli (distort_normalized)
     """
     x, y, z, R = _pose(pose)
     P = np.stack([X.ravel() - x, Y.ravel() - y, np.full(X.size, -z)])
@@ -181,19 +245,19 @@ def project_ground(X, Y, K, dist, pose, img_w, img_h, body=None, min_depth=0.05)
         xn, yn = Pc[0] / zc, Pc[1] / zc
     fx, fy, cx, cy = K[0, 0], K[1, 1], K[0, 2], K[1, 2]
 
-    # Önce ideal pinhole ile kaba FOV kontrolü (distorsiyon polinomu FOV dışında katlanabilir)
-    mx, my = 0.15 * img_w, 0.15 * img_h
-    ui, vi = fx * xn + cx, fy * yn + cy
-    valid = (zc > min_depth) & (ui > -mx) & (ui < img_w + mx) & (vi > -my) & (vi < img_h + my)
-
-    k1, k2, p1, p2, k3 = (list(dist) + [0.0] * 5)[:5]
-    if any(abs(c) > 0 for c in (k1, k2, p1, p2, k3)):
-        r2 = xn * xn + yn * yn
-        rad = 1 + k1 * r2 + k2 * r2 * r2 + k3 * r2 ** 3
-        xd = xn * rad + 2 * p1 * xn * yn + p2 * (r2 + 2 * xn * xn)
-        yd = yn * rad + p1 * (r2 + 2 * yn * yn) + 2 * p2 * xn * yn
-    else:
+    if is_ideal_pinhole(dist, model):
+        # Distorsiyonsuz (simulasyon): ideal pinhole ile kaba FOV kontrolu
+        mx, my = 0.15 * img_w, 0.15 * img_h
+        ui, vi = fx * xn + cx, fy * yn + cy
+        valid = (zc > min_depth) & (ui > -mx) & (ui < img_w + mx) & (vi > -my) & (vi < img_h + my)
         xd, yd = xn, yn
+    else:
+        # Gercek lens: kenar acisinin biraz otesine kadar kabul (pinhole payi genis acida yetmez)
+        th_max = max_field_angle(K, dist, model, img_w, img_h)
+        with np.errstate(invalid="ignore"):
+            th = np.arctan(np.hypot(xn, yn))
+        valid = (zc > min_depth) & (th <= th_max * 1.02 + 1e-6)
+        xd, yd = distort_normalized(xn, yn, dist, model)
     u, v = fx * xd + cx, fy * yd + cy
     valid &= (u >= 0) & (u <= img_w - 1) & (v >= 0) & (v <= img_h - 2)
 
@@ -242,7 +306,7 @@ class SurroundLUT:
         proj = []
         for k, cam in enumerate(cams):
             u, v, ok = project_ground(X, Y, cam["K"], cam["dist"], cam["pose"],
-                                      img_w, img_h, body)
+                                      img_w, img_h, body, model=cam.get("model", "plumb_bob"))
             proj.append((u, v + k * img_h, ok & usable))
 
         map_x = np.full((S, S), -100.0, np.float32)
@@ -361,10 +425,14 @@ class SurroundViewNode(Node):
         for name in CAMS:
             topics[name] = p(f"{name}.topic", DEFAULT_TOPICS[name]).value
             pose = list(p(f"{name}.pose", DEFAULT_POSES[name]).value)
+            # Ic model: launch, config/camera_calibration.yaml'dan (etkin degilse xacro'dan) verir
             fx, fy, cx, cy = p(f"{name}.intrinsics", DEFAULT_INTRINSICS).value
             dist = list(p(f"{name}.dist_coeffs", DEFAULT_DIST).value)
+            model = p(f"{name}.distortion_model", "plumb_bob").value
+            if model not in DIST_MODELS:
+                raise ValueError(f"{name}.distortion_model: {model} desteklenmiyor {DIST_MODELS}")
             K = intrinsic_matrix(fx, fy, cx, cy)
-            cams.append({"K": K, "dist": dist, "pose": pose})
+            cams.append({"K": K, "dist": dist, "pose": pose, "model": model})
 
         bev_px = int(round(bev_m / res))
         t0 = time.perf_counter()
@@ -386,6 +454,10 @@ class SurroundViewNode(Node):
             f"y[{fp[2]:.3f}, {fp[3]:.3f}] m | "
             + " | ".join(f"{n}: {np.round(c['pose'], 3).tolist()}" for n, c in zip(CAMS, cams)))
         for name, cam in zip(CAMS, cams):
+            self.get_logger().info(
+                f"{name} ic model: fx={cam['K'][0, 0]:.2f} fy={cam['K'][1, 1]:.2f} "
+                f"cx={cam['K'][0, 2]:.2f} cy={cam['K'][1, 2]:.2f} | {cam['model']} "
+                f"{np.round(cam['dist'], 6).tolist()}")
             H_g2i = ground_to_image_h(cam["K"], cam["pose"])
             H_i2bev = A @ np.linalg.inv(H_g2i)
             self.get_logger().info(
@@ -463,10 +535,19 @@ class SurroundViewNode(Node):
             if img.shape[:2] != (self.img_h, self.img_w):
                 if name not in self._warned_size:
                     self._warned_size.add(name)
-                    self.get_logger().warn(
-                        f"{name}: görüntü {img.shape[1]}x{img.shape[0]}, beklenen "
-                        f"{self.img_w}x{self.img_h}. Yeniden boyutlandırılıyor; intrinsic "
-                        f"değerler bu çözünürlüğe göre olmalı!")
+                    a_in = img.shape[1] / img.shape[0]
+                    a_exp = self.img_w / self.img_h
+                    if abs(a_in / a_exp - 1) > 0.01:
+                        # Olcekleme en-boy oranini bozar -> homografi YANLIS (crop modu / yanlis kalibrasyon)
+                        self.get_logger().error(
+                            f"{name}: görüntü {img.shape[1]}x{img.shape[0]} (oran {a_in:.3f}), "
+                            f"beklenen {self.img_w}x{self.img_h} (oran {a_exp:.3f}). En-boy oranı "
+                            f"farklı: kuş bakışı YANLIŞ olur! camera_calibration.yaml'daki "
+                            f"image_width/height kameranın yayın moduyla aynı oranda olmalı.")
+                    else:
+                        self.get_logger().info(
+                            f"{name}: görüntü {img.shape[1]}x{img.shape[0]} -> {self.img_w}x"
+                            f"{self.img_h} ölçekleniyor (intrinsic'ler bu çözünürlüğe göre).")
                 img = cv2.resize(img, (self.img_w, self.img_h))
             self._cache[name] = (msg, img)
             out.append(img)

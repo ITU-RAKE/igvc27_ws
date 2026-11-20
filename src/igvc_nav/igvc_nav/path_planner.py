@@ -44,6 +44,18 @@ Yayinlar:
 
 Standart nav modu (standart_mode, varsayilan kapali; frontier.py adim 6): yon frontier + izden,
   yaklasma standart planner'dan (BFS hedefi + agirlikli A*). path_tracker ayni anahtari izler.
+
+Waypoint modu (waypoint_mode, varsayilan kapali; igvc_nav/waypoints.py, frontier.plan_to_target):
+  GPS waypoint'leri (config/waypoints.yaml) sirayla, engellerin arasindan gecilir.
+  BEKLEME: waypoint'lerden uzakken surus yukaridaki standart kodla BIREBIR ayni.
+  AKTIF  : giris waypoint'i waypoint_activation_m'den yakin, onde ve yaklasiliyor -> hedef siradaki
+           waypoint; yol maliyetli Dijkstra (engel/cizgi asla gecilmez). Waypoint gorunmuyorsa (duba
+           golgesi) ona en cok yaklastiran guvenli nokta. waypoint_chain_m'den yakinken yol bir
+           sonrakine zincirlenir (takipci waypoint'te durmaz). Varis: reach_radius - reach_margin.
+           Kacirilan waypoint icin waypoint_retries kez geri donulur, sonra atlanir; zaman asimi atlar.
+  BITTI  : standart surus; ilk waypoint_exit_hint_m boyunca "ileri" = son iki waypoint yonu.
+  Konum: /odometry/global (map), datum: /gps/datum (yoksa yaml datum'u). Durum: /igvc_nav/waypoint_status,
+  RViz: /igvc_nav/waypoint_markers. Calisirken: ros2 param set /path_planner waypoint_mode true|false
 """
 import array
 import math
@@ -59,10 +71,13 @@ from rclpy.executors import ExternalShutdownException
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import OccupancyGrid, Odometry, Path
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy
-from sensor_msgs.msg import CompressedImage, Image
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from sensor_msgs.msg import CompressedImage, Image, NavSatFix
+from std_msgs.msg import String
+from visualization_msgs.msg import Marker, MarkerArray
 
 from igvc_nav import frontier
+from igvc_nav import waypoints as wpmod
 from igvc_nav.costmap_utils import Costmap
 
 MOTION_PRIMITIVES = [
@@ -153,6 +168,26 @@ class PathPlanner(Node):
         self.standart_route_slack_m = float(p("standart_route_slack_m", 1.0).value)
         self.standard_active = False         # son haritada standart hedef kullanildi
         self.route_goal = None               # debug: frontier hedefi (standart modda)
+        # Waypoint modu (bkz. dosya basi). Kapaliyken hicbir hesaba girmez.
+        self.waypoint_mode = bool(p("waypoint_mode", False).value)
+        self.waypoints_file = p("waypoints_file", "").value or wpmod.default_waypoints_path()
+        self.wp_global_topic = p("waypoint_global_odom_topic", "/odometry/global").value
+        self.wp_datum_topic = p("waypoint_datum_topic", "/gps/datum").value
+        self.wp_cfg = dict(
+            activation=float(p("waypoint_activation_m", 4.5).value),
+            reach_margin=float(p("waypoint_reach_margin_m", 0.3).value),
+            timeout_s=float(p("waypoint_timeout_s", 40.0).value),
+            retries=int(p("waypoint_retries", 1).value),
+            exit_hint_m=float(p("waypoint_exit_hint_m", 4.0).value),
+        )
+        self.wp_chain_m = float(p("waypoint_chain_m", 1.5).value)
+        self.wp_approach_coeff = float(p("waypoint_approach_coeff", 2.0).value)
+        self.wp_extend_m = float(p("waypoint_extend_m", 2.5).value)   # son waypoint'ten sonra zincir
+        self.wp_file = None                  # load_waypoints sonucu
+        self.wp = None                       # WaypointManager (datum gelince)
+        self.wp_datum = None                 # (lat, lon, kaynak)
+        self.gpose = None                    # (x, y, yaw) map, /odometry/global
+        self.wp_debug = None                 # debug: [(hucre, yaricap_px, aktif)]
         self.trail = []                      # [(x, y, s)] odom; s = kumulatif mesafe
         self.trail_back = None               # son haritanin koridor rasteri (debug icin de)
         self.trail_pixels = None             # debug: izin hucre koordinatlari (tamami)
@@ -193,6 +228,14 @@ class PathPlanner(Node):
             QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE))
         self.create_timer(1.0 / rate, self.create_path)
         self.create_subscription(Odometry, self.odom_topic, self.odom_callback, 10)
+        self.wp_status_pub = self.create_publisher(String, "/igvc_nav/waypoint_status", 10)
+        self.wp_marker_pub = self.create_publisher(MarkerArray, "/igvc_nav/waypoint_markers", 1)
+        self.create_subscription(Odometry, self.wp_global_topic, self.global_odom_callback, 10)
+        self.create_subscription(NavSatFix, self.wp_datum_topic, self.datum_callback,
+                                 QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                                            reliability=ReliabilityPolicy.RELIABLE))
+        self.create_timer(1.0, self.publish_waypoint_status)
+        self.load_waypoint_file()
         self.add_on_set_parameters_callback(self.on_params)
         self.get_logger().info(
             f"Path planner: {self.map_topic} -> /igvc_nav/planned_path, /igvc_nav/debug_image | "
@@ -256,6 +299,11 @@ class PathPlanner(Node):
         if path is not None and len(path) > 1:
             cv2.polylines(debug_img, [np.asarray(path, np.int32).reshape(-1, 1, 2)], False,
                           (0, 200, 0), 1)
+        if self.wp_debug:                                     # mavi: waypoint'ler (varis dairesi)
+            for (cx, cy), r, active in self.wp_debug:
+                cv2.circle(debug_img, (cx, cy), r, (255, 120, 0), 2 if active else 1)
+                if active:
+                    cv2.circle(debug_img, (cx, cy), 2, (255, 120, 0), -1)
         return debug_img
 
     def publish_path_debug(self, debug_img):
@@ -500,8 +548,18 @@ class PathPlanner(Node):
         self.frontier_cells = None
         self.standard_active, self.route_goal = False, None
         self.fwd = self.forward_vector()
-        if self.goal_mode == "frontier" and self.planner_mode == "normal" and self.select_frontier_goal():
-            return
+        self.wp_debug = None
+        if self.goal_mode == "frontier" and self.planner_mode == "normal":
+            if self.waypoint_mode and self.wp is not None and self.gpose is not None:
+                # BEKLEME / BITTI: asagidaki standart kod aynen calisir (yalnizca debug cizimi)
+                self.wp_debug = self.waypoint_debug_cells()
+                if self.wp.state == wpmod.ACTIVE and self.select_waypoint_goal():
+                    return
+                hint = self.wp.exit_hint()          # BITTI'nin ilk metreleri: cikis yonu
+                if hint is not None:
+                    self.fwd = self.map_dir_to_base(hint)
+            if self.select_frontier_goal():
+                return
         w = self.costmap.pixel_width
         h = self.costmap.pixel_height
         start_x, start_y = self.start_pixel()
@@ -565,6 +623,12 @@ class PathPlanner(Node):
                 self.get_logger().info("Standart nav modu " + ("ACIK" if self.standart_mode else "KAPALI"))
             elif prm.name == "standart_route_slack_m":
                 self.standart_route_slack_m = float(prm.value)
+            elif prm.name == "waypoint_mode":
+                self.waypoint_mode = bool(prm.value)
+                if self.wp is not None:
+                    self.wp.reset()                 # acilinca BEKLEME'den baslar
+                self.get_logger().info("Waypoint modu " + ("ACIK (BEKLEME)" if self.waypoint_mode
+                                                            else "KAPALI: standart surus"))
             elif prm.name in ("trail_radius_m", "trail_length_m", "trail_recent_m",
                               "trail_max_backtrack_m", "trail_turn_after_s"):
                 setattr(self, prm.name, float(prm.value))
@@ -661,6 +725,152 @@ class PathPlanner(Node):
                 c, s = math.cos(yaw), math.sin(yaw)
                 return (c * dx + s * dy, -s * dx + c * dy)
         return (1.0, 0.0)                    # henuz yeterince yol gidilmedi: aracin burnu
+
+    # ------------------------------------------------------------------ waypoint modu
+    def load_waypoint_file(self):
+        try:
+            self.wp_file = wpmod.load_waypoints(self.waypoints_file)
+        except wpmod.WaypointFileError as e:
+            self.wp_file = None
+            if self.waypoint_mode:      # seviye basina ayri satir (bkz. global_odom_callback)
+                self.get_logger().error(f"Waypoint dosyasi yuklenemedi, waypoint modu calismaz: {e}")
+            else:
+                self.get_logger().info(f"Waypoint dosyasi yuklenemedi, waypoint modu calismaz: {e}")
+            return
+        names = ", ".join(w["name"] for w in self.wp_file["waypoints"])
+        self.get_logger().info(f"Waypoint dosyasi: {self.waypoints_file} ({names}) | waypoint_mode="
+                               f"{'ACIK' if self.waypoint_mode else 'KAPALI'}")
+        if self.wp_file["datum"] is not None:      # /gps/datum gelene kadar yaml datum'u
+            self.build_waypoints(*self.wp_file["datum"], "yaml")
+
+    def build_waypoints(self, lat, lon, source):
+        if self.wp_file is None:
+            return
+        if self.wp_datum is not None and abs(self.wp_datum[0] - lat) < 1e-8 and abs(self.wp_datum[1] - lon) < 1e-8:
+            self.wp_datum = (lat, lon, source)
+            return
+        try:
+            pts = wpmod.to_map(self.wp_file["waypoints"], lat, lon)
+        except Exception as e:  # noqa: BLE001  (igvc_localization yoksa vb.)
+            self.get_logger().error(f"Waypoint'ler map'e cevrilemedi: {e}")
+            return
+        names = [w["name"] for w in self.wp_file["waypoints"]]
+        self.wp = wpmod.WaypointManager(pts, names, reach_radius=self.wp_file["reach_radius_m"],
+                                        **self.wp_cfg)
+        self.wp_datum = (lat, lon, source)
+        self.get_logger().info(
+            f"Waypoint'ler map'te (datum {lat:.7f}, {lon:.7f}, kaynak {source}): "
+            + ", ".join(f"{n} ({x:.2f}, {y:.2f})" for n, (x, y) in zip(names, pts)))
+
+    def datum_callback(self, msg):
+        if msg.status.status < 0 or not (math.isfinite(msg.latitude) and math.isfinite(msg.longitude)):
+            return
+        self.build_waypoints(msg.latitude, msg.longitude, "/gps/datum")
+
+    def global_odom_callback(self, msg):
+        p, q = msg.pose.pose.position, msg.pose.pose.orientation
+        yaw = math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
+        self.gpose = (p.x, p.y, yaw)
+        if not self.waypoint_mode or self.wp is None:
+            return
+        t = self.get_clock().now().nanoseconds * 1e-9
+        for kind, text in self.wp.update(p.x, p.y, yaw, t):
+            # Her seviye AYRI satirda: rclpy ayni satirdan farkli seviyede log basilirsa
+            # "Logger severity cannot be changed between calls" ile dugumu cokertir.
+            if kind in ("tekrar", "atlandi", "sicrama"):
+                self.get_logger().warn(f"WAYPOINT: {text}")
+            else:
+                self.get_logger().info(f"WAYPOINT: {text}")
+
+    def map_to_base(self, x, y):
+        gx, gy, gyaw = self.gpose
+        dx, dy = x - gx, y - gy
+        c, s = math.cos(gyaw), math.sin(gyaw)
+        return c * dx + s * dy, -s * dx + c * dy
+
+    def map_dir_to_base(self, d):
+        c, s = math.cos(self.gpose[2]), math.sin(self.gpose[2])
+        return (c * d[0] + s * d[1], -s * d[0] + c * d[1])
+
+    def map_to_cell(self, x, y):
+        """map (x, y) -> haritada hucre koordinati (float; hucre i = [i, i+1))."""
+        lx, ly = self.map_to_base(x, y)
+        c = self.costmap
+        res = max(c.resolution, 1e-3)
+        return (lx - c.origin_x) / res, (ly - c.origin_y) / res
+
+    def select_waypoint_goal(self):
+        """AKTIF: siradaki waypoint'e yol (frontier.plan_to_target). Yol yoksa False (standarda dus)."""
+        res = max(self.costmap.resolution, 1e-3)
+        tgt = self.wp.target()
+        nxt = self.wp.next_point()
+        if nxt is None:            # son waypoint: zincir gidis yonunde biraz devam etsin
+            d = self.wp.heading_out() or (math.cos(self.gpose[2]), math.sin(self.gpose[2]))
+            nxt = (tgt[0] + d[0] * self.wp_extend_m, tgt[1] + d[1] * self.wp_extend_m)
+        t_cell, n_cell = self.map_to_cell(*tgt), self.map_to_cell(*nxt)
+        goal, path, info = frontier.plan_to_target(
+            self.costmap.data, self.start_pixel(), t_cell, next_target=n_cell,
+            cost_threshold=self.goal_cost_threshold, cost_coeff=self.path_find_cost_coeff,
+            approach_coeff=self.wp_approach_coeff, chain_dist=self.wp_chain_m / res,
+            escape_radius=int(round(self.escape_radius_m / res)),
+            min_goal_dist=self.frontier_min_goal_dist_m / res)
+        if goal is None:
+            self.get_logger().warn("WAYPOINT: hedefe yol yok, bu dongu standart hedef secimi",
+                                   throttle_duration_sec=2.0)
+            return False
+        sx, sy = self.start_pixel()
+        self.fwd = (t_cell[0] - sx, t_cell[1] - sy)           # debug oku: waypoint yonu
+        self.trail_back, self.trail_pixels, self.frontier_cells = None, None, None
+        self.best_pos, self.best_score, self.frontier_path = goal, None, path
+        self.standard_active, self.route_goal = False, info["via"]
+        if not info["exact"]:
+            self.get_logger().info("WAYPOINT: hedef gorunmuyor/ulasilamiyor, en cok yaklastiran noktaya",
+                                   throttle_duration_sec=2.0)
+        goal_point = self.get_goal_point()
+        if goal_point is not None:
+            self.goal_pub.publish(goal_point)
+        return True
+
+    def waypoint_debug_cells(self):
+        res = max(self.costmap.resolution, 1e-3)
+        r_px = max(2, int(round(self.wp.reach / res)))
+        active = self.wp.target_index()
+        out = []
+        for k, (x, y) in enumerate(self.wp.points):
+            cx, cy = self.map_to_cell(x, y)
+            out.append(((int(math.floor(cx)), int(math.floor(cy))), r_px, k == active))
+        return out
+
+    def publish_waypoint_status(self):
+        if not self.waypoint_mode:
+            return
+        if self.wp is None:
+            self.wp_status_pub.publish(String(data="durum=HAZIR_DEGIL (waypoint dosyasi/datum yok)"))
+            return
+        xy = self.gpose[:2] if self.gpose is not None else (None, None)
+        self.wp_status_pub.publish(String(data=self.wp.status(*xy)))
+        if self.wp_marker_pub.get_subscription_count() == 0:
+            return
+        done = {n for _, n, r in self.wp.log}
+        active = self.wp.target_index()
+        arr = MarkerArray()
+        for k, ((x, y), name) in enumerate(zip(self.wp.points, self.wp.names)):
+            m = Marker()
+            m.header.frame_id, m.header.stamp = "map", self.get_clock().now().to_msg()
+            m.ns, m.id, m.type, m.action = "waypoints", k, Marker.CYLINDER, Marker.ADD
+            m.pose.position.x, m.pose.position.y, m.pose.position.z = x, y, 0.02
+            m.pose.orientation.w = 1.0
+            m.scale.x = m.scale.y = 2.0 * self.wp.reach
+            m.scale.z = 0.04
+            m.color.a = 0.6
+            if k == active:
+                m.color.g = 1.0
+            elif name in done:
+                m.color.r = m.color.g = m.color.b = 0.5
+            else:
+                m.color.b = 1.0
+            arr.markers.append(m)
+        self.wp_marker_pub.publish(arr)
 
     def select_frontier_goal(self):
         """frontier.plan ile hedef + yol; aday yoksa False (bfs'e dusulur)."""

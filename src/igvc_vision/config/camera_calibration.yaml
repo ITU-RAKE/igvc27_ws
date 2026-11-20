@@ -1,0 +1,97 @@
+# Gercek kamera (Arducam B0610) ic kalibrasyonu -> surround_view kus bakisi homografisi
+#
+# Burada YALNIZCA kameranin kendi (ic) ayarlari var: K matrisi (fx, fy, cx, cy), lens distorsiyonu,
+# kalibrasyonun yapildigi cozunurluk. Kamera POZLARI (konum, yukseklik, pitch/yaw/roll) burada
+# DEGIL: her zaman igvc_description/urdf/igvc_macros.xacro'dan (URDF) gelir.
+#
+# enabled: false -> o kamera icin simulasyon modeli kullanilir (xacro'daki FOV ve cozunurlukten
+#                   ideal pinhole, distorsiyonsuz). Asagidaki degerler OKUNMAZ; simdiki simulasyon
+#                   karsiliklari ornek/bilgi olarak yazili (enabled: true yapsan da cikti degismez).
+# enabled: true  -> asagidaki kalibrasyon degerleri kullanilir.
+#
+# Doldurma: kamerayi kalibre et, ornegin
+#     ros2 run camera_calibration cameracalibrator --size 8x6 --square 0.025 \
+#         --ros-args -r image:=/front_camera/image_raw
+#   ciktidaki (ost.yaml) image_width, image_height, camera_matrix, distortion_model,
+#   distortion_coefficients alanlarini ilgili kameranin altina AYNEN yapistir, enabled: true yap.
+#   (rectification_matrix / projection_matrix gerekmez, yapistirilirsa yok sayilir.)
+#
+# distortion_model (katsayi sirasi OpenCV / ROS camera_info ile ayni):
+#   plumb_bob           5 katsayi: k1 k2 p1 p2 k3           (standart)
+#   rational_polynomial 8 katsayi: k1 k2 p1 p2 k3 k4 k5 k6   (genis aci icin daha iyi)
+#   equidistant         4 katsayi: k1 k2 k3 k4               (fisheye; 110 deg B0610 icin aday)
+#   110 deg lens: en az iki modelle kalibre edip yeniden izdusum hatasi (RMS) dusuk olani sec.
+#
+# Cozunurluk: kalibrasyon cozunurlugu (image_width/height) ile kameranin yayin cozunurlugu farkli
+#   olabilir (ornegin 1920x1200'de kalibre, 1280x800 yayin): K otomatik olceklenir. En-boy orani
+#   AYNI olmali; crop/ROI modu (goruntunun bir bolumunu kesen mod) desteklenmez -> o modda kalibre et.
+#   Lens odagi kalibrasyondan sonra kilitlenmeli (odak degisirse fx ve distorsiyon degisir).
+#
+# Degisiklikten sonra: colcon build --packages-select igvc_vision  (symlink-install degilse)
+#   ve surround_view'i yeniden baslat. Baska dosya ile denemek icin:
+#   ros2 launch igvc_vision surround_view.launch.py calibration_file:=/yol/kalibrasyon.yaml
+
+# Kus bakisinin hesaplandigi kamera goruntusu genisligi [px]. Yukseklik kalibrasyonun en-boy
+# oranindan (1920x1200 -> 640x400). null -> igvc_macros.xacro camera_img_w (simdi 640).
+# Gelen goruntu bu boyuta olceklenir; buyutmek kaliteyi artirir ama yavaslatir.
+process_width: null
+
+# ---- on kamera  (URDF: front_camera) ----
+front:
+  enabled: false
+  image_width: 640
+  image_height: 427
+  camera_matrix:
+    rows: 3
+    cols: 3
+    data: [278.17175610119256, 0.0, 319.5, 0.0, 278.17175610119256, 213.0, 0.0, 0.0, 1.0]
+  distortion_model: plumb_bob
+  distortion_coefficients:
+    rows: 1
+    cols: 5
+    data: [0.0, 0.0, 0.0, 0.0, 0.0]
+
+# ---- arka kamera (URDF: rear_camera) ----
+back:
+  enabled: false
+  image_width: 640
+  image_height: 427
+  camera_matrix:
+    rows: 3
+    cols: 3
+    data: [278.17175610119256, 0.0, 319.5, 0.0, 278.17175610119256, 213.0, 0.0, 0.0, 1.0]
+  distortion_model: plumb_bob
+  distortion_coefficients:
+    rows: 1
+    cols: 5
+    data: [0.0, 0.0, 0.0, 0.0, 0.0]
+
+# ---- sol kamera (URDF: left_camera) ----
+left:
+  enabled: false
+  image_width: 640
+  image_height: 427
+  camera_matrix:
+    rows: 3
+    cols: 3
+    data: [278.17175610119256, 0.0, 319.5, 0.0, 278.17175610119256, 213.0, 0.0, 0.0, 1.0]
+  distortion_model: plumb_bob
+  distortion_coefficients:
+    rows: 1
+    cols: 5
+    data: [0.0, 0.0, 0.0, 0.0, 0.0]
+
+# ---- sag kamera (URDF: right_camera) ----
+right:
+  enabled: false
+  image_width: 640
+  image_height: 427
+  camera_matrix:
+    rows: 3
+    cols: 3
+    data: [278.17175610119256, 0.0, 319.5, 0.0, 278.17175610119256, 213.0, 0.0, 0.0, 1.0]
+  distortion_model: plumb_bob
+  distortion_coefficients:
+    rows: 1
+    cols: 5
+    data: [0.0, 0.0, 0.0, 0.0, 0.0]

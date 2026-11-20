@@ -12,15 +12,16 @@ from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
 
-def robot_description_xml(xacro_file):
+def robot_description_xml(xacro_file, cad_visual='true'):
     """xacro -> URDF metni, XML yorumlari temizlenmis.
     gazebo_ros2_control URDF'i '--param robot_description:=...' olarak YAML ayristiricisina verir;
     yorumlardaki ': ' ve ' #' gibi diziler ayristirmayi bozar. Yorumlar dosyada kalir, yalnizca
-    yayinlanan aciklamadan cikarilir."""
+    yayinlanan aciklamadan cikarilir.
+    cad_visual: 'true' -> CAD gorsel mesh'leri, 'false' -> primitif (yalnizca <visual> degisir)."""
     import re
 
     import xacro
-    xml = xacro.process_file(xacro_file).toxml()
+    xml = xacro.process_file(xacro_file, mappings={'cad_visual': cad_visual}).toxml()
     return re.sub(r'<!--.*?-->', '', xml, flags=re.S)
 
 
@@ -48,19 +49,24 @@ def generate_launch_description():
 
     gui = LaunchConfiguration('gui')
 
-    robot_description = ParameterValue(robot_description_xml(xacro_file), value_type=str)
+    def make_rsp(context):
+        cad = LaunchConfiguration('cad_visual').perform(context)
+        robot_description = ParameterValue(robot_description_xml(xacro_file, cad), value_type=str)
+        return [Node(
+            package='robot_state_publisher',
+            executable='robot_state_publisher',
+            parameters=[{'robot_description': robot_description}],
+            output='screen',
+        )]
 
     return LaunchDescription([
         OpaqueFunction(function=sync_chassis_mesh),
         DeclareLaunchArgument('gui', default_value='true',
                               description='joint_state_publisher_gui kullan'),
+        DeclareLaunchArgument('cad_visual', default_value='true',
+                              description='CAD gorsel mesh (true) / primitif (false)'),
 
-        Node(
-            package='robot_state_publisher',
-            executable='robot_state_publisher',
-            parameters=[{'robot_description': robot_description}],
-            output='screen',
-        ),
+        OpaqueFunction(function=make_rsp),
         Node(
             package='joint_state_publisher_gui',
             executable='joint_state_publisher_gui',

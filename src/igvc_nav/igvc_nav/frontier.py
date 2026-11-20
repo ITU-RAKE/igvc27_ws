@@ -262,3 +262,136 @@ def standard_goal(data, passable, start, forward, along, across, depth, x_coeff,
     if not np.isfinite(score).any():
         return None
     return int(np.argmax(score))
+
+
+# ============================================================================ waypoint hedefi
+def _graph(data, passable):
+    """Gecilebilir hucrelere dugum numarasi. Dondurur: (idx, n); idx[y, x] = dugum ya da -1."""
+    h, w = data.shape
+    idx = np.full((h, w), -1, np.int64)
+    n = int(passable.sum())
+    idx[passable] = np.arange(n)
+    return idx, n
+
+
+def _weighted_graph(data, passable, idx, n, cost_coeff):
+    """8 komsulu maliyetli graf, plan() ile ayni maliyet ve kose kesme kurali."""
+    h, w = data.shape
+    step_cost = 1.0 + np.where(data < 0, 0, data).astype(np.float64) * cost_coeff / 100.0
+    rows, cols, wts = [], [], []
+    for dx, dy in NEIGHBORS:
+        ys0, ys1 = max(0, -dy), h - max(0, dy)
+        xs0, xs1 = max(0, -dx), w - max(0, dx)
+        m = passable[ys0:ys1, xs0:xs1] & passable[ys0 + dy:ys1 + dy, xs0 + dx:xs1 + dx]
+        if dx and dy:
+            m &= passable[ys0 + dy:ys1 + dy, xs0:xs1] & passable[ys0:ys1, xs0 + dx:xs1 + dx]
+        rows.append(idx[ys0:ys1, xs0:xs1][m])
+        cols.append(idx[ys0 + dy:ys1 + dy, xs0 + dx:xs1 + dx][m])
+        wts.append(step_cost[ys0 + dy:ys1 + dy, xs0 + dx:xs1 + dx][m] * math.hypot(dx, dy))
+    return csr_matrix((np.concatenate(wts), (np.concatenate(rows), np.concatenate(cols))),
+                      shape=(n, n))
+
+
+def _trace(pred, idx, node_goal, node_start, cell_x, cell_y):
+    path = []
+    node = node_goal
+    while node >= 0:
+        path.append((int(cell_x[node]), int(cell_y[node])))
+        if node == node_start:
+            break
+        node = int(pred[node])
+    path.reverse()
+    return path
+
+
+def _approach(geo, reach, target, approach_coeff, xs, ys, min_goal_dist, origin):
+    """Hedefe ulasilabiliyorsa hedef hucresi (exact=True); yoksa ulasilabilir hucreler arasinda
+    yol maliyeti + approach_coeff * hedefe kus ucusu mesafe en kucuk olan. -> ((gx, gy), exact) | (None, False)"""
+    h, w = geo.shape
+    tx, ty = target
+    ix, iy = int(math.floor(tx)), int(math.floor(ty))
+    if 0 <= ix < w and 0 <= iy < h and reach[iy, ix]:
+        return (ix, iy), True
+    ok = reach.copy()
+    if min_goal_dist > 0:
+        ok &= np.hypot(xs - origin[0], ys - origin[1]) >= min_goal_dist
+    if not ok.any():
+        ok = reach
+        if not ok.any():
+            return None, False
+    score = np.where(ok, geo + approach_coeff * np.hypot(xs + 0.5 - tx, ys + 0.5 - ty), np.inf)
+    gy, gx = divmod(int(np.argmin(score)), w)
+    return (gx, gy), False
+
+
+def plan_to_target(data, start, target, *, next_target=None, cost_threshold=99, cost_coeff=8.5,
+                   approach_coeff=2.0, chain_dist=0.0, escape_radius=0, min_goal_dist=0.0):
+    """
+    Waypoint hedefine yol (path_planner waypoint_mode, AKTIF durum).
+
+    data: HxW int8 occupancy (data[y, x]; -1 bilinmiyor, 0..100 maliyet). start: (x, y) hucre.
+    target / next_target: (x, y) HUCRE koordinati (float; harita disinda olabilir).
+    plan()'dan farki: "ileri yari duzlem" kisiti yok (slalomda yana manevra gerekir, hedef belli);
+    frontier/iz kullanilmaz. Maliyet ve kose kesme kurali plan() ile ayni: engel/cizgi asla gecilmez.
+
+      a) Hedef hucresi ulasilabilir -> hedef o hucre (exact).
+      b) Degilse (duba golgesi, sisirme, plan yaricapi disi) -> ulasilabilir hucreler arasinda
+         geo + approach_coeff * hedefe uzaklik en kucuk olan ("hedefe en cok yaklastiran guvenli nokta").
+      c) Zincirleme: hedef exact ve robota chain_dist'ten yakinsa yol hedefte BITMEZ; hedeften
+         next_target'a (ayni kurallarla) devam eder. Takipci yol sonu gormez, waypoint'te durmaz.
+
+    Dondurur: (goal, path, info) ya da (None, None, info).
+      info: {'exact', 'chained', 'via' (zincirde hedef hucresi), 'escape'}
+    """
+    h, w = data.shape
+    sx, sy = start
+    ys, xs = np.mgrid[0:h, 0:w]
+    passable = (data != -1) & (data <= cost_threshold)
+    info = {'exact': False, 'chained': False, 'via': None, 'escape': False}
+    lead = []
+    if not passable[sy, sx]:
+        r = escape_radius
+        y0, y1, x0, x1 = max(0, sy - r), min(h, sy + r + 1), max(0, sx - r), min(w, sx + r + 1)
+        win = passable[y0:y1, x0:x1] & (np.hypot(xs[y0:y1, x0:x1] - sx, ys[y0:y1, x0:x1] - sy) <= r)
+        if r <= 0 or not win.any():
+            return None, None, info
+        wy, wx = np.nonzero(win)
+        k = int(np.argmin((wx + x0 - sx) ** 2 + (wy + y0 - sy) ** 2))
+        ex, ey = int(wx[k] + x0), int(wy[k] + y0)
+        n_lead = max(abs(ex - sx), abs(ey - sy))
+        lead = [(int(round(sx + (ex - sx) * t / n_lead)), int(round(sy + (ey - sy) * t / n_lead)))
+                for t in range(n_lead)]
+        info['escape'] = True
+        sx, sy = ex, ey
+
+    idx, n = _graph(data, passable)
+    graph = _weighted_graph(data, passable, idx, n, cost_coeff)
+    cell_y, cell_x = np.nonzero(passable)
+    s = int(idx[sy, sx])
+    dist, pred = dijkstra(graph, indices=s, return_predecessors=True)
+    reach = np.zeros((h, w), bool)
+    reach[passable] = np.isfinite(dist)
+    geo = np.full((h, w), np.inf)
+    geo[passable] = dist
+
+    goal, exact = _approach(geo, reach, target, approach_coeff, xs, ys, min_goal_dist, (sx, sy))
+    if goal is None:
+        return None, None, info
+    info['exact'] = exact
+    path = _trace(pred, idx, int(idx[goal[1], goal[0]]), s, cell_x, cell_y)
+
+    if (next_target is not None and exact and chain_dist > 0
+            and math.hypot(target[0] - sx, target[1] - sy) <= chain_dist):
+        g = int(idx[goal[1], goal[0]])
+        dist2, pred2 = dijkstra(graph, indices=g, return_predecessors=True)
+        reach2 = np.zeros((h, w), bool)
+        reach2[passable] = np.isfinite(dist2)
+        geo2 = np.full((h, w), np.inf)
+        geo2[passable] = dist2
+        goal2, _ = _approach(geo2, reach2, next_target, approach_coeff, xs, ys, 0.0, goal)
+        if goal2 is not None and goal2 != goal:
+            path2 = _trace(pred2, idx, int(idx[goal2[1], goal2[0]]), g, cell_x, cell_y)
+            info['chained'], info['via'] = True, goal
+            path = path + path2[1:]
+            goal = goal2
+    return goal, lead + path, info

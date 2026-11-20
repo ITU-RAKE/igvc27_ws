@@ -63,26 +63,41 @@
                     value="${int(round(camera_img_w*tan(camera_vfov/2)/tan(camera_hfov/2)))}"/>
     <xacro:property name="camera_rate"     value="30"/>
     <xacro:property name="camera_mass"     value="0.1"/>
-    <xacro:property name="camera_body_x"   value="0.025"/>  <!-- kamera kutusu (gorsel) -->
-    <xacro:property name="camera_body_y"   value="0.09"/>
-    <xacro:property name="camera_body_z"   value="0.025"/>
+    <!-- Kamera govdesi (collision/primitif gorsel kutusu): CAD kamerasinin arka plaka + govde + lens
+         olculeri. Kutu optik merkezin ARKASINDA (lens ucu = optik merkez), kamera kendini gormez -->
+    <xacro:property name="camera_body_x"   value="0.031"/>
+    <xacro:property name="camera_body_y"   value="0.043"/>
+    <xacro:property name="camera_body_z"   value="0.043"/>
 
-    <!-- Kamera diregi: govde ustunden yukselen iki direk + tepede arti seklinde iki profil -->
+    <!-- Kamera diregi (CAD / gercek arac ile ayni): govde tabanindan yukselen iki direk (y=0, x=+-mast_pole_x,
+         govdenin icinden gecer) + tepede arti seklinde iki profil. Kameralar profil uclarina 43 deg'lik
+         mentese braketiyle baglanir (braket/kelepceler yalnizca CAD gorselinde) -->
     <xacro:property name="mast_profile"    value="0.02"/>   <!-- 20x20 profil -->
-    <xacro:property name="mast_pole_x"     value="${camera_x_offset - 0.05}"/>  <!-- direkler y=0, x=+-bu (uzunluk ekseni) -->
-    <xacro:property name="mast_bar_gap"    value="0.03"/>   <!-- profil ust yuzeyi ile optik merkez arasi -->
+    <xacro:property name="mast_pole_x"     value="0.125"/>  <!-- direkler y=0, x=+-bu (uzunluk ekseni) -->
+    <xacro:property name="mast_bar_x_len"  value="0.56"/>   <!-- on-arka tepe profili boyu -->
+    <xacro:property name="mast_bar_y_len"  value="0.275"/>  <!-- sol-sag tepe profili boyu -->
+    <xacro:property name="mast_bar_gap"    value="0.003"/>  <!-- profil ust yuzeyi ile optik merkez arasi -->
     <xacro:property name="mast_mass"       value="0.8"/>
-    <!-- Govde ustunden profil alt yuzeyine kadar direk boyu -->
-    <xacro:property name="mast_pole_len"
-                    value="${camera_height - mast_bar_gap - mast_profile - ground_clearance - chassis_height}"/>
+    <!-- Tepe profili ust yuzeyi, govde tabanina gore -->
+    <xacro:property name="mast_bar_top"
+                    value="${camera_height - mast_bar_gap - ground_clearance}"/>
+    <!-- Govde tabanindan profil alt yuzeyine kadar direk boyu -->
+    <xacro:property name="mast_pole_len"   value="${mast_bar_top - mast_profile}"/>
 
-    <!-- 2D lidarlar: govde tavaninda, on diregin onunde / arka diregin arkasinda -->
-    <xacro:property name="lidar_radius"    value="0.035"/>  <!-- govde silindiri (gorsel) -->
-    <xacro:property name="lidar_length"    value="0.04"/>
-    <xacro:property name="lidar_mass"      value="0.17"/>
-    <xacro:property name="lidar_gap"       value="0.03"/>   <!-- direk yuzeyi ile lidar govdesi arasi -->
-    <xacro:property name="lidar_x_offset"
-                    value="${mast_pole_x + mast_profile/2 + lidar_gap + lidar_radius}"/>  <!-- merkezden -->
+    <!-- 2D lidarlar: govde tavaninda, on diregin onunde / arka diregin arkasinda.
+         On: RPLIDAR S3 (kare govde), arka: RPLIDAR A2M8 (silindir). Olcu/kutle Slamtec datasheet'leri,
+         CAD mesh'leri (meshes_cad/lidar_s3.stl, lidar_a2m8.stl) ile ayni -->
+    <xacro:property name="lidar_x_offset"     value="0.35"/>   <!-- merkezden (CAD ile ayni) -->
+    <xacro:property name="lidar_scan_height"  value="0.02"/>   <!-- link (tarama merkezi) govde ustunden -->
+    <xacro:property name="lidar_base_gap"     value="0.004"/>  <!-- lidar tabani govde ustunden (montaj plakasi) -->
+    <xacro:property name="lidar_s3_size_x"    value="0.0598"/> <!-- on-arka -->
+    <xacro:property name="lidar_s3_size_y"    value="0.0556"/>
+    <xacro:property name="lidar_s3_height"    value="0.0413"/>
+    <xacro:property name="lidar_s3_mass"      value="0.115"/>
+    <xacro:property name="lidar_a2m8_radius"  value="0.038"/>
+    <xacro:property name="lidar_a2m8_height"  value="0.041"/>
+    <xacro:property name="lidar_a2m8_mass"    value="0.19"/>
+    <!-- Asagidaki tarama ayarlari IKI lidar icin ortak (S3 degerleri) -->
     <xacro:property name="lidar_fov"       value="${radians(280)}"/>  <!-- kendi onunde +-140 deg -->
     <xacro:property name="lidar_min_range" value="0.12"/>
     <xacro:property name="lidar_max_range" value="6.0"/>
@@ -113,6 +128,19 @@
     <xacro:property name="gps_h_std"        value="0.02"/>   <!-- m, yatay (RTK fix) -->
     <xacro:property name="gps_v_std"        value="0.05"/>   <!-- m, dikey -->
     <xacro:property name="gps_vel_std"      value="0.02"/>   <!-- m/s -->
+
+    <!-- CAD gorsel mesh'leri (meshes_cad/, metre). Kaynak: stl_exports/ (tekerlekler meshlab ile
+         ~1.9M -> 40k ucgene indirildi, orijin lastik merkezine tasindi).
+         Yalnizca <visual>: collision primitif, inertial makrolardan -> fizik cad_visual'dan bagimsiz.
+         CAD tekerlek yaricapi 0.074; gorsel wheel_radius'a radyal olcekle buyutulur (gorunen = fiziksel).
+         CAD caster yuksekligi 0.10 (= ground_clearance); ground_clearance degisirse olceklenir. -->
+    <!-- Arg burada: igvc_controller/controller.launch.py bu dosyayi tek basina isler -->
+    <xacro:arg name="cad_visual" default="true"/>
+    <xacro:property name="use_cad_visual"   value="$(arg cad_visual)"/>
+    <xacro:property name="cad_mesh_dir"     value="package://igvc_description/meshes_cad"/>
+    <xacro:property name="cad_wheel_radius" value="0.074"/>
+    <xacro:property name="cad_wheel_scale"  value="${wheel_radius/cad_wheel_radius}"/>
+    <xacro:property name="cad_caster_scale" value="${ground_clearance/0.10}"/>
 
     <!-- ===================== INERTIAL MAKROLARI ===================== -->
     <xacro:macro name="box_inertial" params="mass x y z *origin">
@@ -150,11 +178,24 @@
     <!-- side: left / right, reflect: 1 (sol, +y) / -1 (sag, -y) -->
     <xacro:macro name="drive_wheel" params="side reflect">
         <link name="${side}_wheel">
-            <visual>
-                <origin xyz="0 0 0" rpy="${PI/2} 0 0"/>
-                <geometry><cylinder radius="${wheel_radius}" length="${wheel_width}"/></geometry>
-                <material name="black"/>
-            </visual>
+            <xacro:if value="${use_cad_visual}">
+                <!-- Mesh aksi y (eklem ekseni); motor/reduktor iceri (govdeye) dogru uzanir -->
+                <visual>
+                    <origin xyz="0 0 0" rpy="0 0 0"/>
+                    <geometry>
+                        <mesh filename="${cad_mesh_dir}/${side}_wheel.stl"
+                              scale="${cad_wheel_scale} 1 ${cad_wheel_scale}"/>
+                    </geometry>
+                    <material name="black"/>
+                </visual>
+            </xacro:if>
+            <xacro:unless value="${use_cad_visual}">
+                <visual>
+                    <origin xyz="0 0 0" rpy="${PI/2} 0 0"/>
+                    <geometry><cylinder radius="${wheel_radius}" length="${wheel_width}"/></geometry>
+                    <material name="black"/>
+                </visual>
+            </xacro:unless>
             <collision>
                 <origin xyz="0 0 0" rpy="${PI/2} 0 0"/>
                 <geometry><cylinder radius="${wheel_radius}" length="${wheel_width}"/></geometry>
@@ -179,7 +220,16 @@
     <xacro:macro name="caster_wheel" params="position reflect">
         <link name="${position}_caster">
             <visual>
-                <geometry><sphere radius="${caster_radius}"/></geometry>
+                <geometry>
+                    <xacro:if value="${use_cad_visual}">
+                        <!-- Doner caster (catal + teker); collision yine kure -->
+                        <mesh filename="${cad_mesh_dir}/caster.stl"
+                              scale="${cad_caster_scale} ${cad_caster_scale} ${cad_caster_scale}"/>
+                    </xacro:if>
+                    <xacro:unless value="${use_cad_visual}">
+                        <sphere radius="${caster_radius}"/>
+                    </xacro:unless>
+                </geometry>
                 <material name="grey"/>
             </visual>
             <collision>
@@ -208,13 +258,16 @@
         </gazebo>
     </xacro:macro>
 
-    <!-- Kamera diregi. Link orijini govde ust yuzeyinin merkezi -->
-    <xacro:macro name="mast_box" params="x y z sx sy sz">
-        <visual>
-            <origin xyz="${x} ${y} ${z}" rpy="0 0 0"/>
-            <geometry><box size="${sx} ${sy} ${sz}"/></geometry>
-            <material name="grey"/>
-        </visual>
+    <!-- Kamera diregi. Link orijini govde ust yuzeyinin merkezi (direkler bunun altina, govde
+         tabanina kadar iner). vis=false: yalnizca collision (gorsel CAD mesh'inden) -->
+    <xacro:macro name="mast_box" params="x y z sx sy sz vis:=true">
+        <xacro:if value="${vis}">
+            <visual>
+                <origin xyz="${x} ${y} ${z}" rpy="0 0 0"/>
+                <geometry><box size="${sx} ${sy} ${sz}"/></geometry>
+                <material name="grey"/>
+            </visual>
+        </xacro:if>
         <collision>
             <origin xyz="${x} ${y} ${z}" rpy="0 0 0"/>
             <geometry><box size="${sx} ${sy} ${sz}"/></geometry>
@@ -222,21 +275,32 @@
     </xacro:macro>
 
     <xacro:macro name="camera_mast">
-        <xacro:property name="bar_z" value="${mast_pole_len + mast_profile/2}"/>
+        <!-- z'ler link orijinine (govde ustu) gore -->
+        <xacro:property name="pole_z" value="${mast_pole_len/2 - chassis_height}"/>
+        <xacro:property name="bar_z"  value="${mast_bar_top - mast_profile/2 - chassis_height}"/>
+        <xacro:property name="vis"    value="${not use_cad_visual}"/>
         <link name="camera_mast">
+            <xacro:if value="${use_cad_visual}">
+                <!-- Direkler + tepe profilleri + kelepceler + capraz baglanti -->
+                <visual>
+                    <origin xyz="0 0 0" rpy="0 0 0"/>
+                    <geometry><mesh filename="${cad_mesh_dir}/mast.stl"/></geometry>
+                    <material name="grey"/>
+                </visual>
+            </xacro:if>
             <!-- Direkler -->
-            <xacro:mast_box x="${mast_pole_x}" y="0" z="${mast_pole_len/2}"
+            <xacro:mast_box x="${mast_pole_x}" y="0" z="${pole_z}" vis="${vis}"
                             sx="${mast_profile}" sy="${mast_profile}" sz="${mast_pole_len}"/>
-            <xacro:mast_box x="${-mast_pole_x}" y="0" z="${mast_pole_len/2}"
+            <xacro:mast_box x="${-mast_pole_x}" y="0" z="${pole_z}" vis="${vis}"
                             sx="${mast_profile}" sy="${mast_profile}" sz="${mast_pole_len}"/>
             <!-- Tepe profilleri: on-arka ve sol-sag -->
-            <xacro:mast_box x="0" y="0" z="${bar_z}"
-                            sx="${2*camera_x_offset}" sy="${mast_profile}" sz="${mast_profile}"/>
-            <xacro:mast_box x="0" y="0" z="${bar_z}"
-                            sx="${mast_profile}" sy="${2*camera_y_offset}" sz="${mast_profile}"/>
-            <xacro:box_inertial mass="${mast_mass}" x="${2*camera_x_offset}" y="${2*camera_y_offset}"
-                                z="${mast_pole_len}">
-                <origin xyz="0 0 ${mast_pole_len/2}" rpy="0 0 0"/>
+            <xacro:mast_box x="0" y="0" z="${bar_z}" vis="${vis}"
+                            sx="${mast_bar_x_len}" sy="${mast_profile}" sz="${mast_profile}"/>
+            <xacro:mast_box x="0" y="0" z="${bar_z}" vis="${vis}"
+                            sx="${mast_profile}" sy="${mast_bar_y_len}" sz="${mast_profile}"/>
+            <xacro:box_inertial mass="${mast_mass}" x="${mast_bar_x_len}" y="${mast_bar_y_len}"
+                                z="${mast_bar_top}">
+                <origin xyz="0 0 ${mast_bar_top/2 - chassis_height}" rpy="0 0 0"/>
             </xacro:box_inertial>
         </link>
 
@@ -253,8 +317,15 @@
         <!-- <name>_camera_link: optik merkez, x ileri (Gazebo sensor bu linkte) -->
         <link name="${name}_camera_link">
             <visual>
-                <origin xyz="${-camera_body_x/2} 0 0" rpy="0 0 0"/>
-                <geometry><box size="${camera_body_x} ${camera_body_y} ${camera_body_z}"/></geometry>
+                <xacro:if value="${use_cad_visual}">
+                    <!-- Kamera + profile baglanan 43 deg mentese braketi; lens ucu optik merkezde -->
+                    <origin xyz="0 0 0" rpy="0 0 0"/>
+                    <geometry><mesh filename="${cad_mesh_dir}/camera.stl"/></geometry>
+                </xacro:if>
+                <xacro:unless value="${use_cad_visual}">
+                    <origin xyz="${-camera_body_x/2} 0 0" rpy="0 0 0"/>
+                    <geometry><box size="${camera_body_x} ${camera_body_y} ${camera_body_z}"/></geometry>
+                </xacro:unless>
                 <material name="black"/>
             </visual>
             <collision>
@@ -310,26 +381,60 @@
         </gazebo>
     </xacro:macro>
 
-    <!-- name: front/rear, x: govde merkezine gore, yaw: bakis yonu, topic: LaserScan topic'i
-         Link orijini tarama duzlemi (govde silindirinin merkezi), x ileri -->
-    <xacro:macro name="lidar" params="name x yaw topic">
-        <link name="${name}_lidar_link">
-            <visual>
-                <geometry><cylinder radius="${lidar_radius}" length="${lidar_length}"/></geometry>
-                <material name="black"/>
-            </visual>
-            <collision>
-                <geometry><cylinder radius="${lidar_radius}" length="${lidar_length}"/></geometry>
-            </collision>
-            <xacro:cylinder_inertial mass="${lidar_mass}" radius="${lidar_radius}" length="${lidar_length}">
+    <!-- Lidar govdesi (visual + collision + inertial). Govde tabani lidar_base_gap'te, link'e gore z -->
+    <!-- geometry_block: <origin> + <geometry> (primitif; collision ve cad_visual=false gorseli) -->
+    <xacro:macro name="lidar_body" params="mesh **geometry_block *inertial">
+        <visual>
+            <xacro:if value="${use_cad_visual}">
                 <origin xyz="0 0 0" rpy="0 0 0"/>
-            </xacro:cylinder_inertial>
+                <geometry><mesh filename="${cad_mesh_dir}/${mesh}"/></geometry>
+            </xacro:if>
+            <xacro:unless value="${use_cad_visual}">
+                <xacro:insert_block name="geometry_block"/>
+            </xacro:unless>
+            <material name="black"/>
+        </visual>
+        <collision>
+            <xacro:insert_block name="geometry_block"/>
+        </collision>
+        <xacro:insert_block name="inertial"/>
+    </xacro:macro>
+
+    <!-- name: front/rear, x: govde merkezine gore, yaw: bakis yonu, topic: LaserScan topic'i,
+         model: s3 / a2m8. Link orijini tarama merkezi, x ileri -->
+    <xacro:macro name="lidar" params="name x yaw topic model">
+        <xacro:property name="cz" value="${lidar_base_gap - lidar_scan_height}"/>  <!-- govde tabani, link'e gore -->
+        <link name="${name}_lidar_link">
+            <xacro:if value="${model == 's3'}">
+                <xacro:lidar_body mesh="lidar_s3.stl">
+                    <geometry_block>
+                        <origin xyz="0 0 ${cz + lidar_s3_height/2}" rpy="0 0 0"/>
+                        <geometry><box size="${lidar_s3_size_x} ${lidar_s3_size_y} ${lidar_s3_height}"/></geometry>
+                    </geometry_block>
+                    <xacro:box_inertial mass="${lidar_s3_mass}" x="${lidar_s3_size_x}" y="${lidar_s3_size_y}"
+                                        z="${lidar_s3_height}">
+                        <origin xyz="0 0 ${cz + lidar_s3_height/2}" rpy="0 0 0"/>
+                    </xacro:box_inertial>
+                </xacro:lidar_body>
+            </xacro:if>
+            <xacro:if value="${model == 'a2m8'}">
+                <xacro:lidar_body mesh="lidar_a2m8.stl">
+                    <geometry_block>
+                        <origin xyz="0 0 ${cz + lidar_a2m8_height/2}" rpy="0 0 0"/>
+                        <geometry><cylinder radius="${lidar_a2m8_radius}" length="${lidar_a2m8_height}"/></geometry>
+                    </geometry_block>
+                    <xacro:cylinder_inertial mass="${lidar_a2m8_mass}" radius="${lidar_a2m8_radius}"
+                                             length="${lidar_a2m8_height}">
+                        <origin xyz="0 0 ${cz + lidar_a2m8_height/2}" rpy="0 0 0"/>
+                    </xacro:cylinder_inertial>
+                </xacro:lidar_body>
+            </xacro:if>
         </link>
 
         <joint name="${name}_lidar_joint" type="fixed">
             <parent link="chassis"/>
             <child link="${name}_lidar_link"/>
-            <origin xyz="${x} 0 ${chassis_height + lidar_length/2}" rpy="0 0 ${yaw}"/>
+            <origin xyz="${x} 0 ${chassis_height + lidar_scan_height}" rpy="0 0 ${yaw}"/>
         </joint>
 
         <gazebo reference="${name}_lidar_link">
@@ -433,7 +538,14 @@
     <xacro:macro name="gps">
         <link name="gps_link">
             <visual>
-                <geometry><box size="${gps_body} ${gps_body} ${gps_body/2}"/></geometry>
+                <geometry>
+                    <xacro:if value="${use_cad_visual}">
+                        <mesh filename="${cad_mesh_dir}/gps.stl"/>
+                    </xacro:if>
+                    <xacro:unless value="${use_cad_visual}">
+                        <box size="${gps_body} ${gps_body} ${gps_body/2}"/>
+                    </xacro:unless>
+                </geometry>
                 <material name="grey"/>
             </visual>
             <xacro:box_inertial mass="0.05" x="${gps_body}" y="${gps_body}" z="${gps_body/2}">
