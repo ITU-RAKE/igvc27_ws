@@ -2,6 +2,8 @@
 #
 # Yarismada: jurinin verdigi enlem/boylamlar buraya yazilir (lat/lon esas alinir).
 # Simulasyon (igvc_course_3.world): koordinatlar dunyadaki 'kirmizi_daire*' modellerinden alindi.
+#   4. waypoint (nml_cikis, kirmizi_daire_clone_1) yalnizca igvc_course_4.world'de isaretli; konum
+#   her iki dunyada da gecerli (isaretler yalnizca gorsel, planner lat/lon'u kullanir).
 #   Bu modeller yalnizca gorsel isaret (collision yok, statik): lidar gormez, arac uzerinden gecer.
 #   lat/lon, dunya dosyasinin spherical_coordinates noktasinda (= ekf.yaml gps_odometry datum'u)
 #   igvc_localization/geodesy.py EnuFrame.to_geodetic ile hesaplandi (gidis-donus hatasi < 1 mm).
@@ -34,3 +36,7 @@ waypoints:
     latitude: 42.667988081
     longitude: -83.217597210
     sim_xy: [33.0202, -1.3240]       # dunya modeli: kirmizi_daire
+  - name: nml_cikis          # No Man's Land cikisi (serit cizgilerinin yeniden basladigi yer)
+    latitude: 42.667940813
+    longitude: -83.217597136
+    sim_xy: [33.0263, -6.5748]       # dunya modeli: kirmizi_daire_clone_1 (yalnizca igvc_course_4.world)

@@ -20,7 +20,7 @@ CFG = os.path.normpath(os.path.join(HERE, '..', 'config', 'waypoints.yaml'))
 def test_config_file_converts_to_sim_positions():
     """config/waypoints.yaml'daki lat/lon, datum'da map'e cevrilince dunya modellerinin konumu (sim_xy)."""
     wf = W.load_waypoints(CFG)
-    assert len(wf['waypoints']) == 3 and wf['reach_radius_m'] == 1.0
+    assert len(wf['waypoints']) == 4 and wf['reach_radius_m'] == 1.0
     pts = W.to_map(wf['waypoints'], *wf['datum'])
     with open(CFG) as f:
         sim = [w['sim_xy'] for w in yaml.safe_load(f)['waypoints']]
