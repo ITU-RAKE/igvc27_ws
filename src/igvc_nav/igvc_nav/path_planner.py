@@ -54,6 +54,11 @@ Waypoint modu (waypoint_mode, varsayilan kapali; igvc_nav/waypoints.py, frontier
            sonrakine zincirlenir (takipci waypoint'te durmaz). Varis: reach_radius - reach_margin.
            Kacirilan waypoint icin waypoint_retries kez geri donulur, sonra atlanir; zaman asimi atlar.
   BITTI  : standart surus; ilk waypoint_exit_hint_m boyunca "ileri" = son iki waypoint yonu.
+           waypoint_rearm=true: waypoint_rearm_travel_m yol gidilip butun waypoint'lere
+           waypoint_rearm_dist_m'den uzaklasinca yeniden BEKLEME (ikinci tur); waypoint_max_laps (0 = sinirsiz).
+  YAKLASMA (waypoint_approach=true): giris waypoint'i waypoint_approach_m (20 m) icinde ve onde. Onde acik
+           yay >= waypoint_open_field_deg ve girise duz hat bos ise dogrudan girise (plan_to_target);
+           degilse standart frontier secimine girise yakinlik egilimi (waypoint_approach_bias). 4.5 m'de AKTIF.
   Konum: /odometry/global (map), datum: /gps/datum (yoksa yaml datum'u). Durum: /igvc_nav/waypoint_status,
   RViz: /igvc_nav/waypoint_markers. Calisirken: ros2 param set /path_planner waypoint_mode true|false
 """
@@ -149,9 +154,9 @@ class PathPlanner(Node):
         # Koridor yari genisligi: serit 3.05 m, sisirmeden sonra serbest bolge ~+-1.1 m; arac seridin
         # ortasindan 0.3-0.5 m kaysa da karsi kenar koridorda kalsin. Parkurun farkli bolumleri
         # (viraj kollari) birbirinden >= 8 m uzak.
-        self.trail_radius_m = float(p("trail_radius_m", 2.5).value)            # 1.6 
+        self.trail_radius_m = float(p("trail_radius_m", 3.5).value)            # 1.6 
         self.trail_length_m = float(p("trail_length_m", 20.0).value)           # tur 113 m: eski iz unutulur
-        self.trail_recent_m = float(p("trail_recent_m", 4.0).value)            # son kisim koridorda degil
+        self.trail_recent_m = float(p("trail_recent_m", 6.0).value)            # son kisim koridorda degil
         self.trail_max_backtrack_m = float(p("trail_max_backtrack_m", 8.0).value)
         # Onde (ust yari) bu kadar sure hedef yoksa arka yariya bakilir (cikmazdan donus)
         self.trail_turn_after_s = float(p("trail_turn_after_s", 2.0).value)
@@ -179,7 +184,22 @@ class PathPlanner(Node):
             timeout_s=float(p("waypoint_timeout_s", 40.0).value),
             retries=int(p("waypoint_retries", 1).value),
             exit_hint_m=float(p("waypoint_exit_hint_m", 4.0).value),
+            # Ikinci tur: BITTI'den sonra yeterince uzaklasinca yeniden BEKLEME (varsayilan kapali)
+            rearm=bool(p("waypoint_rearm", False).value),
+            rearm_travel_m=float(p("waypoint_rearm_travel_m", 30.0).value),
+            rearm_dist_m=float(p("waypoint_rearm_dist_m", 10.0).value),
+            max_laps=int(p("waypoint_max_laps", 0).value),
+            # Uzaktan yonelme (YAKLASMA): giris waypoint'i bu menzile girince (varsayilan kapali)
+            approach=bool(p("waypoint_approach", False).value),
+            approach_m=float(p("waypoint_approach_m", 20.0).value),
+            approach_timeout_s=float(p("waypoint_approach_timeout_s", 20.0).value),
+            approach_cooldown_s=float(p("waypoint_approach_cooldown_s", 30.0).value),
         )
+        # YAKLASMA hedef secimi: frontier adayina waypoint'e yakinlik egilimi (hucre basina); onde acik yay
+        # waypoint_open_field_deg'i asiyor ve girise duz hat bos ise dogrudan girise (plan_to_target)
+        self.wp_approach_bias = float(p("waypoint_approach_bias", 1.0).value)
+        self.wp_open_field_deg = float(p("waypoint_open_field_deg", 120.0).value)
+        self.approach_bias = None            # bu haritada frontier'e verilen egilim hedefi (hucre)
         self.wp_chain_m = float(p("waypoint_chain_m", 1.5).value)
         self.wp_approach_coeff = float(p("waypoint_approach_coeff", 2.0).value)
         self.wp_extend_m = float(p("waypoint_extend_m", 2.5).value)   # son waypoint'ten sonra zincir
@@ -549,12 +569,20 @@ class PathPlanner(Node):
         self.standard_active, self.route_goal = False, None
         self.fwd = self.forward_vector()
         self.wp_debug = None
+        self.approach_bias = None
         if self.goal_mode == "frontier" and self.planner_mode == "normal":
             if self.waypoint_mode and self.wp is not None and self.gpose is not None:
                 # BEKLEME / BITTI: asagidaki standart kod aynen calisir (yalnizca debug cizimi)
                 self.wp_debug = self.waypoint_debug_cells()
                 if self.wp.state == wpmod.ACTIVE and self.select_waypoint_goal():
                     return
+                if self.wp.state == wpmod.APPROACH:
+                    # YAKLASMA: acik alanda dogrudan girise; degilse frontier'e girise yakinlik egilimi
+                    # (serit/duba/cep/iz/standart mod aynen calisir, yalnizca hedef secimi egilir)
+                    t_cell = self.map_to_cell(*self.wp.approach_target())
+                    if self.approach_open_field(t_cell) and self.select_approach_direct(t_cell):
+                        return
+                    self.approach_bias = t_cell
                 hint = self.wp.exit_hint()          # BITTI'nin ilk metreleri: cikis yonu
                 if hint is not None:
                     self.fwd = self.map_dir_to_base(hint)
@@ -629,6 +657,22 @@ class PathPlanner(Node):
                     self.wp.reset()                 # acilinca BEKLEME'den baslar
                 self.get_logger().info("Waypoint modu " + ("ACIK (BEKLEME)" if self.waypoint_mode
                                                             else "KAPALI: standart surus"))
+            elif prm.name in ("waypoint_approach_bias", "waypoint_open_field_deg"):
+                setattr(self, "wp_approach_bias" if prm.name.endswith("bias") else "wp_open_field_deg",
+                        float(prm.value))
+                self.get_logger().info(f"{prm.name} = {float(prm.value):g}")
+            elif prm.name in ("waypoint_rearm", "waypoint_rearm_travel_m", "waypoint_rearm_dist_m",
+                              "waypoint_max_laps", "waypoint_approach", "waypoint_approach_m",
+                              "waypoint_approach_timeout_s", "waypoint_approach_cooldown_s"):
+                key = prm.name[len("waypoint_"):]
+                val = (bool(prm.value) if key in ("rearm", "approach") else int(prm.value) if key == "max_laps"
+                       else float(prm.value))
+                if key == "approach" and not val and self.wp is not None and self.wp.state == wpmod.APPROACH:
+                    self.wp._leave_approach()      # kapatilinca hemen standart surus
+                self.wp_cfg[key] = val
+                if self.wp is not None:
+                    setattr(self.wp, key, val)
+                self.get_logger().info(f"{prm.name} = {val}")
             elif prm.name in ("trail_radius_m", "trail_length_m", "trail_recent_m",
                               "trail_max_backtrack_m", "trail_turn_after_s"):
                 setattr(self, prm.name, float(prm.value))
@@ -777,7 +821,7 @@ class PathPlanner(Node):
         for kind, text in self.wp.update(p.x, p.y, yaw, t):
             # Her seviye AYRI satirda: rclpy ayni satirdan farkli seviyede log basilirsa
             # "Logger severity cannot be changed between calls" ile dugumu cokertir.
-            if kind in ("tekrar", "atlandi", "sicrama"):
+            if kind in ("tekrar", "atlandi", "sicrama", "yaklasma_iptal"):
                 self.get_logger().warn(f"WAYPOINT: {text}")
             else:
                 self.get_logger().info(f"WAYPOINT: {text}")
@@ -831,10 +875,46 @@ class PathPlanner(Node):
             self.goal_pub.publish(goal_point)
         return True
 
+    def approach_open_field(self, t_cell):
+        """Koridor yonlendirmiyor mu: giris onde (+-90 deg), onde acik yay >= waypoint_open_field_deg
+        ve girise duz hat (plan yaricapina kadar) bos ve ucuz."""
+        res = max(self.costmap.resolution, 1e-3)
+        sx, sy = self.start_pixel()
+        if t_cell[0] - sx <= 0:                     # giris aracin arkasinda / yaninda: dogrudan gitme
+            return False
+        r = max(5.0, (self.plan_radius_m - 0.3) / res)
+        arc = frontier.open_arc_deg(self.costmap.data, (sx, sy), (1.0, 0.0), r, self.fallback_max_cost)
+        return arc >= self.wp_open_field_deg and frontier.ray_clear(
+            self.costmap.data, (sx, sy), t_cell, r, self.fallback_max_cost)
+
+    def select_approach_direct(self, t_cell):
+        """YAKLASMA, acik alan: girise (harita disinda olabilir) en cok yaklastiran guvenli noktaya yol."""
+        res = max(self.costmap.resolution, 1e-3)
+        goal, path, info = frontier.plan_to_target(
+            self.costmap.data, self.start_pixel(), t_cell,
+            cost_threshold=self.goal_cost_threshold, cost_coeff=self.path_find_cost_coeff,
+            approach_coeff=self.wp_approach_coeff, escape_radius=int(round(self.escape_radius_m / res)),
+            min_goal_dist=self.frontier_min_goal_dist_m / res)
+        if goal is None:
+            return False
+        sx, sy = self.start_pixel()
+        self.fwd = (t_cell[0] - sx, t_cell[1] - sy)           # debug oku: giris yonu
+        self.trail_back, self.trail_pixels, self.frontier_cells = None, None, None
+        self.best_pos, self.best_score, self.frontier_path = goal, None, path
+        self.standard_active, self.route_goal = False, None
+        self.get_logger().info("WAYPOINT: YAKLASMA acik alan, dogrudan giris waypoint'ine",
+                               throttle_duration_sec=2.0)
+        goal_point = self.get_goal_point()
+        if goal_point is not None:
+            self.goal_pub.publish(goal_point)
+        return True
+
     def waypoint_debug_cells(self):
         res = max(self.costmap.resolution, 1e-3)
         r_px = max(2, int(round(self.wp.reach / res)))
         active = self.wp.target_index()
+        if active is None:
+            active = self.wp.approach_index()
         out = []
         for k, (x, y) in enumerate(self.wp.points):
             cx, cy = self.map_to_cell(x, y)
@@ -853,6 +933,8 @@ class PathPlanner(Node):
             return
         done = {n for _, n, r in self.wp.log}
         active = self.wp.target_index()
+        if active is None:
+            active = self.wp.approach_index()
         arr = MarkerArray()
         for k, ((x, y), name) in enumerate(zip(self.wp.points, self.wp.names)):
             m = Marker()
@@ -889,6 +971,8 @@ class PathPlanner(Node):
                 frontier_radius=self.plan_radius_m / res if self.plan_radius_m > 0 else 0,
                 forward=fwd, escape_radius=int(round(self.escape_radius_m / res)),
                 trail_back=self.trail_back, max_backtrack=self.trail_max_backtrack_m / res,
+                bias_target=self.approach_bias,
+                bias_coeff=self.wp_approach_bias if self.approach_bias is not None else 0.0,
                 standard_depth=self.goal_search_depth if self.standart_mode else 0,
                 depth_coeff=self.depth_coeff, route_slack=self.standart_route_slack_m / res)
 

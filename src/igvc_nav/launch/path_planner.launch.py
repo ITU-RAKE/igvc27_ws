@@ -1,6 +1,7 @@
 """Yerel yol planlayici: ros2 launch igvc_nav path_planner.launch.py [with_maps:=false]
 
 standart_mode:=true standart nav modunda baslatir (calisirken: ros2 param set /path_planner standart_mode true).
+waypoint_rearm:=true ikinci turda waypoint modunu yeniden kurar.
 waypoint_mode:=true GPS waypoint takibini acar (config/waypoints.yaml; waypoints_file:=<yaml> baska dosya).
 Girdi /fused_map (igvc_vision). with_maps:=true ise igvc_vision fused_map zincirini de baslatir
 (lidar_map, surround_view, camera_map, fused_map). Arac ayak izi igvc_macros.xacro'dan,
@@ -37,6 +38,8 @@ def launch_node(context):
             'standart_mode': LaunchConfiguration('standart_mode'),
             'waypoint_mode': LaunchConfiguration('waypoint_mode'),
             'waypoints_file': LaunchConfiguration('waypoints_file'),
+            'waypoint_rearm': LaunchConfiguration('waypoint_rearm'),
+            'waypoint_approach': LaunchConfiguration('waypoint_approach'),
             'use_sim_time': LaunchConfiguration('use_sim_time'),
         }],
     )]
@@ -53,6 +56,10 @@ def generate_launch_description():
                               description='Standart nav modu (standart engele yaklasma; iz/frontier korunur)'),
         DeclareLaunchArgument('waypoint_mode', default_value='false',
                               description='GPS waypoint takibi (uzaktayken standart surus)'),
+        DeclareLaunchArgument('waypoint_rearm', default_value='false',
+                              description='Ikinci tur: waypoint\'ler bitince uzaklasinca yeniden BEKLEME'),
+        DeclareLaunchArgument('waypoint_approach', default_value='false',
+                              description='Uzaktan yonelme: giris waypoint\'i 20 m icinde iken ona yonel'),
         DeclareLaunchArgument('waypoints_file', default_value='',
                               description='Waypoint dosyasi (bos: igvc_nav/config/waypoints.yaml)'),
         IncludeLaunchDescription(
