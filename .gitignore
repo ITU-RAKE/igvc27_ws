@@ -6,3 +6,6 @@ log/
 # Python derleme onbellegi
 __pycache__/
 *.pyc
+
+# Ham CAD/STL ciktilari (cok buyuk; sadelestirilmis halleri src/igvc_description/meshes_cad/)
+stl_exports/

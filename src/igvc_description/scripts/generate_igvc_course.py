@@ -276,6 +276,23 @@ MODEL_SDF = '''<?xml version="1.0"?>
 '''
 
 
+# igvc_course_4.world varyanti: igvc_course_2/3 ile ayni parkur (merkez hat, gurultu tohumu, No Man's
+# Land, baslangic cizgisi yok), yalnizca serit genisligi IGVC araliginin (10-20 ft = 3.05-6.10 m)
+# ortasina yakin. Variller, rampa ve waypoint'ler dunya dosyasinda, degismez.
+WIDE_TRACK_WIDTH = 4.75   # m (~15.6 ft)
+
+
+def write_wide_variant(out):
+    """course_4.png + course_4.dae (genis serit). -> merkez hat uzunlugu."""
+    img, _, length = build(dict(COURSE, start_line=False, track_width=WIDE_TRACK_WIDTH))
+    cv2.imwrite(os.path.join(out, 'materials/textures/course_4.png'), img)
+    x0, x1 = COURSE['x_range']
+    y0, y1 = COURSE['y_range']
+    with open(os.path.join(out, 'meshes/course_4.dae'), 'w') as f:
+        f.write(DAE.format(x0=x0, x1=x1, y0=y0, y1=y1).replace('textures/course.png', 'textures/course_4.png'))
+    return length
+
+
 def main():
     here = os.path.dirname(os.path.abspath(__file__))
     out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(here, '..', 'models', 'igvc_course')
@@ -292,6 +309,7 @@ def main():
     cv2.imwrite(os.path.join(out, 'materials/textures/course_2.png'), img2)
     with open(os.path.join(out, 'meshes/course_2.dae'), 'w') as f:
         f.write(DAE.format(x0=x0, x1=x1, y0=y0, y1=y1).replace('textures/course.png', 'textures/course_2.png'))
+    write_wide_variant(out)
     with open(os.path.join(out, 'model.config'), 'w') as f:
         f.write(MODEL_CONFIG)
     with open(os.path.join(out, 'model.sdf'), 'w') as f:

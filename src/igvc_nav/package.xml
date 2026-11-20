@@ -23,6 +23,9 @@
   <exec_depend>python3-yaml</exec_depend>
   <!-- /fused_map ve arac geometrisi (launch: igvc_vision.robot_geometry) -->
   <exec_depend>igvc_vision</exec_depend>
+  <exec_depend>igvc_localization</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>visualization_msgs</exec_depend>
   <!-- navigation.launch.py (Nav2, entegre degil) nav2_bringup ister. -->
 
   <export>

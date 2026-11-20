@@ -1,0 +1,42 @@
+# GPS waypoint'leri (IGVC AutoNav, No Man's Land).
+#
+# Yarismada: jurinin verdigi enlem/boylamlar buraya yazilir (lat/lon esas alinir).
+# Simulasyon (igvc_course_3.world): koordinatlar dunyadaki 'kirmizi_daire*' modellerinden alindi.
+#   4. waypoint (nml_cikis, kirmizi_daire_clone_1) yalnizca igvc_course_4.world'de isaretli; konum
+#   her iki dunyada da gecerli (isaretler yalnizca gorsel, planner lat/lon'u kullanir).
+#   Bu modeller yalnizca gorsel isaret (collision yok, statik): lidar gormez, arac uzerinden gecer.
+#   lat/lon, dunya dosyasinin spherical_coordinates noktasinda (= ekf.yaml gps_odometry datum'u)
+#   igvc_localization/geodesy.py EnuFrame.to_geodetic ile hesaplandi (gidis-donus hatasi < 1 mm).
+#   map = Gazebo dunya cercevesi (ENU: x dogu, y kuzey), bu yuzden sim_xy ile /ground_truth/odom
+#   dogrudan karsilastirilabilir. sim_xy yalnizca bilgi/dogrulama icin; planner lat/lon'u
+#   /gps/datum ile map'e cevirmeli (gercek aracta datum ilk GPS fix'i olabilir).
+#
+# Kural (IGVC 2027, I.4 / II.2): waypoint 2 m capli daire -> merkeze 1 m yaklasinca ulasilmis sayilir.
+# Parkur iki yonde de kosulabilir; No Man's Land'deki waypoint'ler her iki yonde gecilebilmeli.
+# Arac waypoint'lerden SIRAYLA gecerek variller arasinda slalom atmali.
+
+datum:                       # map orijini (simulasyon: dunya spherical_coordinates)
+  latitude: 42.668
+  longitude: -83.218
+
+reach_radius_m: 1.0          # IGVC: 2 m capli waypoint
+
+# Varsayilan gecis sirasi: parkur saat yonunde (kuzey -> dogu -> guney). Sag kenarda No Man's Land'e
+# kuzeyden girilir, guneye dogru ilerlenir (y azalir). Ters yonde kosuda sira tersine cevrilir.
+waypoints:
+  - name: nml_giris          # No Man's Land girisi (serit cizgilerinin bittigi yer)
+    latitude: 42.668063412
+    longitude: -83.217596759
+    sim_xy: [33.0571, 7.0443]        # dunya modeli: kirmizi_daire_clone_0
+  - name: nml_orta
+    latitude: 42.668014725
+    longitude: -83.217594836
+    sim_xy: [33.2148, 1.6359]        # dunya modeli: kirmizi_daire_clone
+  - name: nml_cikis_oncesi
+    latitude: 42.667988081
+    longitude: -83.217597210
+    sim_xy: [33.0202, -1.3240]       # dunya modeli: kirmizi_daire
+  - name: nml_cikis          # No Man's Land cikisi (serit cizgilerinin yeniden basladigi yer)
+    latitude: 42.667940813
+    longitude: -83.217597136
+    sim_xy: [33.0263, -6.5748]       # dunya modeli: kirmizi_daire_clone_1 (yalnizca igvc_course_4.world)

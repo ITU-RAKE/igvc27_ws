@@ -37,7 +37,7 @@ def generate_launch_description():
     ekf = LaunchConfiguration('ekf')
 
     # Varsayilan: IGVC Auto-Nav benzeri parkur (baslangic cizgisi orijinde, kuzeye bakar -> yaw 90 deg)
-    course = os.path.join(desc_share, 'worlds', 'igvc_course_2.world')
+    course = os.path.join(desc_share, 'worlds', 'igvc_course_5.world')
     default_world = course if os.path.exists(course) else os.path.join(desc_share, 'worlds', 'empty.world')
     notes = [] if os.path.exists(course) else [LogInfo(msg=(
         'igvc_course.world bulunamadi (colcon build alin) -> empty.world'))]

@@ -29,17 +29,13 @@ surround_view_node:
     merged_topic: igvc_vision/merged_image
     homo_topic: igvc_vision/merged_image_homo
 
-    # Kamera topic'leri ve distorsiyon (simulasyonda sifir; gercek kamerada kalibrasyondan)
-    # dist_coeffs: [k1, k2, p1, p2, k3]
+    # Kamera topic'leri. Distorsiyon ve intrinsic'ler burada DEGIL: config/camera_calibration.yaml'da
+    # (launch oradan verir; etkin olmayan kamera icin simulasyon modeli, distorsiyonsuz).
     front:
       topic: /front_camera/image_raw/compressed
-      dist_coeffs: [0.0, 0.0, 0.0, 0.0, 0.0]
     back:
       topic: /rear_camera/image_raw/compressed
-      dist_coeffs: [0.0, 0.0, 0.0, 0.0, 0.0]
     left:
       topic: /left_camera/image_raw/compressed
-      dist_coeffs: [0.0, 0.0, 0.0, 0.0, 0.0]
     right:
       topic: /right_camera/image_raw/compressed
-      dist_coeffs: [0.0, 0.0, 0.0, 0.0, 0.0]

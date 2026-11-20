@@ -113,6 +113,14 @@ class Ekf:
         return self.update((yaw_meas,), (self.x[YAW],), self._H_YAW,
                            np.array([[std * std]]), angle_rows=(0,), gate=gate)
 
+    def reset_yaw(self, yaw, std):
+        """Yonu verilen degere yeniden kilitle (yon kilitlenmesinden kurtarma): yaw'in capraz
+        kovaryansi silinir, belirsizligi std^2. Konum/hiz/sapma degismez."""
+        self.x[YAW] = wrap(yaw)
+        self.P[YAW, :] = 0.0
+        self.P[:, YAW] = 0.0
+        self.P[YAW, YAW] = std * std
+
     def reset_position(self, px, py, cov_xy, lever=(0.0, 0.0), var=100.0):
         """
         Konumu olcume yeniden kilitle (kapi kilitlenmesinden kurtarma): konum belirsizligini
@@ -138,3 +146,57 @@ class Ekf:
         H[0, YAW] = -s * lx - c * ly
         H[1, YAW] = c * lx - s * ly
         return self.update((px, py), h, H, np.asarray(cov_xy, float), gate=gate)
+
+
+# ============================================================================ yon kurtarma hakemi
+class CourseTracker:
+    """
+    GPS konumlarindan rota (gidis yonu) tahmini: arac DUZ ve yeterince HIZLI giderken, iz
+    min_dist (ve GPS gurultusune gore dist_sigma * std) kadar uzayinca bastan sona yon.
+    Rota std ~ sqrt(2) * std / mesafe: dist_sigma 16 -> en fazla ~5 deg (RTK 2 cm: 1.5 m'de ~1 deg).
+    Donus, yavaslama ya da ileri/geri degisimi izi sifirlar (rota yalnizca duz parcadan).
+    Geri giderken (v < 0) rota 180 derece cevrilir: aracin burnunun yonu.
+    """
+
+    def __init__(self, min_dist=1.5, dist_sigma=16.0, max_turn=0.3, min_speed=0.3, max_age=30.0):
+        self.min_dist, self.dist_sigma = min_dist, dist_sigma
+        self.max_turn, self.min_speed, self.max_age = max_turn, min_speed, max_age
+        self.track = []           # [(t, x, y)]
+        self.sign = 0
+
+    def reset(self):
+        self.track, self.sign = [], 0
+
+    def add(self, t, x, y, v, w, pos_std):
+        """GPS konumu + filtrenin hiz/donus tahmini. Rota hazirsa (yon [rad]) yoksa None."""
+        sign = 1 if v > 0 else -1
+        if abs(w) > self.max_turn or abs(v) < self.min_speed or (self.sign and sign != self.sign):
+            self.reset()
+            return None
+        self.sign = sign
+        self.track.append((t, x, y))
+        while self.track and t - self.track[0][0] > self.max_age:
+            self.track.pop(0)
+        t0, x0, y0 = self.track[0]
+        d = math.hypot(x - x0, y - y0)
+        if d < max(self.min_dist, self.dist_sigma * pos_std):
+            return None
+        course = math.atan2(y - y0, x - x0)
+        return wrap(course + math.pi) if sign < 0 else course
+
+
+def arbitrate_yaw(course, imu_yaw, filter_yaw, tol, margin):
+    """
+    IMU ile filtre yonu uyusmuyorken GPS rotasi hakem. Dondurur:
+      'imu'    rota IMU'ya tol icinde ve filtreden en az margin daha yakin: filtre yanlis -> IMU'ya kilitle
+      'filter' rota filtreye tol icinde ve IMU'dan en az margin daha yakin: IMU bozuk -> reddetmeye devam
+      None     belirsiz (ikisi de rotadan uzak ya da fark margin'den kucuk): bekle
+    Rota gurultusu margin'in altinda tutulur (CourseTracker dist_sigma).
+    """
+    e_imu = abs(wrap(course - imu_yaw))
+    e_filt = abs(wrap(course - filter_yaw))
+    if e_imu <= tol and e_filt - e_imu >= margin:
+        return 'imu'
+    if e_filt <= tol and e_imu - e_filt >= margin:
+        return 'filter'
+    return None

@@ -30,6 +30,9 @@ ekf_local:
     process_noise: [1.0e-4, 1.0e-4, 1.0e-5, 0.5, 1.0, 1.0e-8]
     initial_covariance: [1.0e-6, 1.0e-6, 1.0e-6, 0.1, 0.1, 1.0e-4]
     outlier_gate: true
+    # Yon kilitlenmesi: IMU yaw'i ust uste bu kadar reddedilirse (100 Hz'de 1 s) IMU'nun bagil
+    # referansi filtreye hizalanir. Filtre/odom ZIPLAMAZ. 0 = kapali
+    yaw_reset_after: 100
 
 # ---------------------------------------------------------------- global EKF
 # map -> odom (tekerlek + IMU + GPS + mutlak yon). /odometry/global: map'te mutlak konum.
@@ -69,6 +72,19 @@ ekf_global:
     outlier_gate: true        # GPS sicramalari (chi^2 %99.9) reddedilir
     gps_reset_after: 10       # GPS ust uste bu kadar reddedilirse konum GPS'e yeniden kilitlenir
                               # (filtre koptu: patinaj/carpisma). 10 Hz'de 1 s
+    # Yon kilitlenmesi (arac elle dondurulunce / IMU sifirlaninca filtre yonu IMU'dan kopar):
+    # IMU yaw'i ust uste yaw_reset_after kez reddedilirse GPS rotasi hakem olur. Arac duz
+    # (|w| < max_turn) ve >= min_speed giderken GPS izinin yonu IMU'ya tol icinde ve filtreden en az
+    # margin daha yakinsa yon IMU'ya, konum GPS'e kilitlenir; filtreye yakinsa IMU bozuk sayilir
+    # (reddedilmeye devam). Gerekli duz mesafe: max(min_dist, dist_sigma * GPS std)
+    # (RTK 2 cm: 1.5 m; 1 m'lik GPS: 16 m). 0 = kapali
+    yaw_reset_after: 100      # IMU mesaji (100 Hz'de 1 s)
+    yaw_arbiter_tol_deg: 20.0
+    yaw_arbiter_margin_deg: 10.0
+    yaw_arbiter_min_dist: 1.5     # m
+    yaw_arbiter_dist_sigma: 16.0
+    yaw_arbiter_max_turn: 0.3     # rad/s
+    yaw_arbiter_min_speed: 0.3    # m/s
 
 # ---------------------------------------------------------------- GPS odometrisi
 # /gps/fix -> /gps/odometry (map'te anten ENU konumu), /gps/datum (kalici)

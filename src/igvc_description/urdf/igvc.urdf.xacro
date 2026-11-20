@@ -1,10 +1,13 @@
 <?xml version="1.0"?>
 <robot name="igvc" xmlns:xacro="http://www.ros.org/wiki/xacro">
 
+    <!-- cad_visual (arg, igvc_macros.xacro'da tanimli): true -> govde/tekerlek/caster gorseli CAD
+         mesh'lerinden, false -> primitif. Ornek: xacro igvc.urdf.xacro cad_visual:=false -->
+
     <xacro:include filename="$(find igvc_description)/urdf/igvc_macros.xacro"/>
     <xacro:include filename="$(find igvc_description)/urdf/igvc_gazebo.xacro"/>
 
-    <material name="dark_grey"><color rgba="0.25 0.25 0.28 1.0"/></material>
+    <material name="white"><color rgba="0.95 0.95 0.95 1.0"/></material>
     <material name="grey"><color rgba="0.6 0.6 0.6 1.0"/></material>
     <material name="black"><color rgba="0.05 0.05 0.05 1.0"/></material>
 
@@ -25,9 +28,14 @@
         <visual>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://igvc_description/meshes/chassis.stl"/>
+                <xacro:if value="${use_cad_visual}">
+                    <mesh filename="${cad_mesh_dir}/chassis_body.stl"/>
+                </xacro:if>
+                <xacro:unless value="${use_cad_visual}">
+                    <mesh filename="package://igvc_description/meshes/chassis.stl"/>
+                </xacro:unless>
             </geometry>
-            <material name="dark_grey"/>
+            <material name="white"/>
         </visual>
         <collision>
             <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -65,9 +73,9 @@
     <xacro:camera name="left"  x="0"                   y="${camera_y_offset}"  yaw="${PI/2}"/>
     <xacro:camera name="right" x="0"                   y="${-camera_y_offset}" yaw="${-PI/2}"/>
 
-    <!-- 2D lidarlar: her biri kendi onundeki 280 deg -->
-    <xacro:lidar name="front" x="${lidar_x_offset}"  yaw="0"     topic="scan_front"/>
-    <xacro:lidar name="rear"  x="${-lidar_x_offset}" yaw="${PI}" topic="scan_rear"/>
+    <!-- 2D lidarlar: her biri kendi onundeki 280 deg. On RPLIDAR S3, arka RPLIDAR A2M8 -->
+    <xacro:lidar name="front" x="${lidar_x_offset}"  yaw="0"     topic="scan_front" model="s3"/>
+    <xacro:lidar name="rear"  x="${-lidar_x_offset}" yaw="${PI}" topic="scan_rear"  model="a2m8"/>
 
     <!-- IMU (BNO085) ve GPS (RTK, direk tepesinde) -->
     <xacro:imu/>

@@ -19,6 +19,18 @@ mode: global ->  map -> odom
     T_map_odom = T_map_base * inv(T_odom_base)  (yerel poz TF'ten ayni zaman damgasiyla)
   (Eski kodda oteleme dondurulmeden cikariliyordu ve frame'ler uyusmuyordu.)
 
+Yon kilitlenmesinden kurtarma (yaw_reset_after > 0): filtre yonu IMU yonundan kapinin otesine
+ayrilirsa (Gazebo'da arac elle dondurulunce, IMU sifirlanip referansi degisince, IMU verisi kesilip
+donuste tekerlek patinaji birikince) IMU yaw'i hep reddedilir ve fark hic kapanmaz. Ust uste
+yaw_reset_after IMU yaw'i reddedilince:
+  local  (bagil yaw): filtre DEGISMEZ, yalnizca IMU'nun bagil referansi (yaw0) filtreye hizalanir.
+         odom cercevesi hic ziplamaz (konum gibi yon de "gorulmeden" devam eder; dunyaya hizalama
+         global'in isi).
+  global (mutlak yaw, heading_source imu): GPS rotasi hakem (arac duz ve >= yaw_arbiter_min_speed
+         giderken GPS konumlarinin cizdigi yon, ekf_core.CourseTracker). Rota IMU'ya belirgin
+         yakinsa yon IMU'ya, konum GPS'e kilitlenir; filtreye yakinsa IMU bozuk sayilir (manyetik)
+         ve reddedilmeye devam eder; belirsizse beklenir. Hakem olmadan yon degistirilmez.
+
 Zamanlama: asenkron sirali guncelleme. Her mesaj kendi zaman damgasina kadar predict edilip
 yalnizca bir kez kullanilir (eski global EKF ayni GPS'i odom hizinda tekrar kullaniyordu).
 Filtre zamanindan max_delay'den eski mesaj atilir, daha yenisi predict'siz uygulanir.
@@ -38,7 +50,7 @@ from rclpy.time import Time
 from sensor_msgs.msg import Imu
 from tf2_ros import Buffer, TransformBroadcaster, TransformException, TransformListener
 
-from igvc_localization.ekf_core import BG, Ekf, PX, PY, V, W, YAW, wrap
+from igvc_localization.ekf_core import BG, CourseTracker, Ekf, PX, PY, V, W, YAW, arbitrate_yaw, wrap
 
 
 def yaw_of(q):
@@ -106,6 +118,17 @@ class EkfNode(Node):
         # carpisma, kacirilma): konum GPS'e yeniden kilitlenir. Tek tek sicramalar reddedilmeye
         # devam eder. Kapi tek basina kopan filtreyi bir daha GPS'e dondurmez (kilitlenme).
         self.gps_reset_after = int(p('gps_reset_after', 10).value)     # 10 Hz GPS'te 1 s
+        # Yon kilitlenmesinden kurtarma (bkz. dosya basi). 0 = kapali.
+        self.yaw_reset_after = int(p('yaw_reset_after', 100).value)    # IMU mesaji (100 Hz'de 1 s)
+        self.arb_tol = math.radians(float(p('yaw_arbiter_tol_deg', 20.0).value))
+        self.arb_margin = math.radians(float(p('yaw_arbiter_margin_deg', 10.0).value))
+        self.course = CourseTracker(
+            min_dist=float(p('yaw_arbiter_min_dist', 1.5).value),
+            dist_sigma=float(p('yaw_arbiter_dist_sigma', 16.0).value),
+            max_turn=float(p('yaw_arbiter_max_turn', 0.3).value),
+            min_speed=float(p('yaw_arbiter_min_speed', 0.3).value))
+        self.yaw_rejects = 0        # ust uste reddedilen IMU yaw
+        self.yaw_suspect = False    # global: IMU ile filtre yonu uyusmuyor, GPS rotasi bekleniyor
 
         self.ekf = Ekf(q, p0=np.diag(self.p0))
         self.t_ns = None            # filtre zamani
@@ -116,7 +139,8 @@ class EkfNode(Node):
         self.lever = None           # GPS anten ofseti (govde cercevesi)
         self.gps_rejects = 0        # ust uste reddedilen GPS
         self.roll = self.pitch = 0.0   # IMU egimi (GPS anten ofseti egim duzeltmesi)
-        self.stats = {k: 0 for k in ('wheel', 'gyro', 'yaw', 'gps', 'course', 'late', 'rejected', 'gps_reset')}
+        self.stats = {k: 0 for k in ('wheel', 'gyro', 'yaw', 'gps', 'course', 'late', 'rejected', 'gps_reset',
+                                     'yaw_reset')}
 
         self.create_subscription(Odometry, wheel_topic, self.on_wheel, 20)
         self.create_subscription(Imu, imu_topic, self.on_imu, qos_profile_sensor_data)
@@ -193,7 +217,36 @@ class EkfNode(Node):
         if yaw is not None and (not self.is_global or self.heading_source == 'imu'):
             ok, _ = self.ekf.update_yaw(yaw, self.yaw_std, gate=self.gate)
             self.count('yaw', ok)
+            self.watch_yaw(ok, yaw)
         self.publish()
+
+    def watch_yaw(self, ok, yaw):
+        """Yon kilitlenmesi takibi (bkz. dosya basi)."""
+        if ok:
+            self.yaw_rejects = 0
+            if self.yaw_suspect:
+                self.yaw_suspect = False
+                self.get_logger().info('IMU yonu yeniden filtreyle uyumlu')
+            return
+        self.yaw_rejects += 1
+        if self.yaw_reset_after <= 0 or self.yaw_rejects < self.yaw_reset_after:
+            return
+        diff = math.degrees(wrap(yaw - self.ekf.x[YAW]))
+        if self.imu_yaw_relative:
+            # Filtreye dokunma: IMU'nun bagil referansini kaydir (odom ziplamaz)
+            self.yaw0 = wrap(self.yaw0 + math.radians(diff))
+            self.yaw_rejects = 0
+            self.stats['yaw_reset'] += 1
+            self.get_logger().warn(
+                f'IMU yaw {self.yaw_reset_after} kez ust uste reddedildi (fark {diff:+.1f} deg): IMU '
+                f'bagil referansi filtreye hizalandi (odom yonu korunur, ziplama yok)')
+        elif not self.yaw_suspect:
+            self.yaw_suspect = True
+            self.course.reset()
+            self.get_logger().warn(
+                f'IMU yaw {self.yaw_reset_after} kez ust uste reddedildi (fark {diff:+.1f} deg): '
+                f'yon GPS rotasiyla dogrulanacak (arac duz ve >= {self.course.min_speed:.1f} m/s '
+                f'gidince)')
 
     def gps_lever(self, gps_frame):
         """Anten ofseti, egim duzeltmeli (x, y). 3B ofset TF base -> gps_link'ten bir kez okunur;
@@ -223,6 +276,10 @@ class EkfNode(Node):
             return
         if not self.advance(msg.header.stamp):
             return
+        if self.arbitrate_heading(msg, px, py, cov, lever):
+            self.count('gps', True)
+            self.publish()
+            return
         ok, d2 = self.ekf.update_position(px, py, cov, lever=lever, gate=self.gate)
         if ok:
             self.gps_rejects = 0
@@ -242,6 +299,35 @@ class EkfNode(Node):
                                        throttle_duration_sec=2.0)
         self.count('gps', ok)
         self.publish()
+
+    def arbitrate_heading(self, msg, px, py, cov, lever):
+        """Global, heading_source imu: GPS rotasini takip et; yon supheliyse hakemlik yap.
+        True: yon ve konum yeniden kilitlendi (bu GPS olcumu kullanildi)."""
+        if self.heading_source != 'imu' or self.yaw_reset_after <= 0:
+            return False
+        x = self.ekf.x
+        t = Time.from_msg(msg.header.stamp).nanoseconds * 1e-9
+        std = math.sqrt(max(cov[0, 0], cov[1, 1], 0.0))
+        course = self.course.add(t, px, py, x[V], x[W], std)
+        if not self.yaw_suspect or course is None or self.last_abs_yaw is None:
+            return False
+        imu, filt = self.last_abs_yaw, x[YAW]
+        verdict = arbitrate_yaw(course, imu, filt, self.arb_tol, self.arb_margin)
+        degs = (f'filtre {math.degrees(filt):+.1f}, IMU {math.degrees(imu):+.1f}, '
+                f'GPS rotasi {math.degrees(course):+.1f} deg')
+        if verdict == 'imu':
+            self.ekf.reset_yaw(imu, self.yaw_std)
+            self.ekf.reset_position(px, py, cov, lever=lever)
+            self.yaw_suspect, self.yaw_rejects, self.gps_rejects = False, 0, 0
+            self.course.reset()
+            self.stats['yaw_reset'] += 1
+            self.get_logger().warn(f'Yon kilitlenmesi: GPS rotasi IMU ile uyumlu ({degs}): '
+                                   f'yon IMU\'ya, konum GPS\'e yeniden kilitlendi')
+            return True
+        if verdict == 'filter':
+            self.get_logger().warn(f'IMU yonu GPS rotasiyla uyusmuyor ({degs}): IMU bozuk sayiliyor '
+                                   f'(manyetik?), filtre yonu korunuyor', throttle_duration_sec=10.0)
+        return False
 
     def on_gps_vel(self, msg):
         ve, vn = msg.vector.x, msg.vector.y

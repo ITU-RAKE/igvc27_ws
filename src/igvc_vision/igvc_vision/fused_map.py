@@ -32,6 +32,14 @@ isin boyunca) bolgede kamera verisi atilir; orasi lidar'a gore de bilinmiyorsa b
 Homografi duba gibi yuksek cisimleri zemin sanip arkaya dogru uzatir; o piksellere "bos" demek
 dubanin arkasindaki seridi kesik gosteriyordu. Bilinmeyen alan planner icin gecilemez.
 
+Bilinmeyen bilinmeyen kalir (inflate_unknown, varsayilan false): sisirme bilinmeyen hucreye yalnizca oldurucu
+(100) yazar. Eskiden lidar golgesinin icindeki sisirme halkasi gecilebilir maliyet aliyor, golgeler arasinda
+planner'in sizdigi surekli bir serit olusturuyordu.
+Ince bos serit temizligi (thin_free_cleanup, varsayilan acik): sisirmeden sonra, bilinmeyene komsu ve
+thin_free_min_width (3) hucreden ince gecilebilir (bos ya da maliyetli) seritler bilinmeyen olur
+(igvc_vision/costmap.remove_thin_free).
+Golge kenari ile engel sisirmesi arasinda kalan 1-2 hucrelik bos seritten planner yol cizebiliyordu.
+
 Birlestirme kurali (hucre bazinda):
   herhangi bir kaynak dolu (100)    -> dolu   (lidar yuksek engel, kamera serit/kirmizi gorur)
   degilse herhangi bir kaynak bos   -> bos
@@ -59,7 +67,7 @@ from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Image
 
-from igvc_vision.costmap import inflate, shadow_mask
+from igvc_vision.costmap import inflate, remove_thin_free, shadow_mask
 
 UNKNOWN, FREE, OCCUPIED = -1, 0, 100
 
@@ -120,6 +128,15 @@ class FusedMap(Node):
         # beyaz bantlar da buyuk sahte engel oluyordu. Gorulmeyen yere bos denmez.
         self.lidar_shadow = bool(p('lidar_shadow', True).value)
         self.shadow_margin = int(round(float(p('shadow_margin_m', 0.10).value) / self.res))
+        # Ince bos serit temizligi: bilinmeyene (golgeye) komsu, thin_free_min_width hucreden ince bos
+        # seritler bilinmeyen olur (golge kenari ile engel sisirmesi arasinda planner'in sizdigi 1-2 hucrelik
+        # "bos" seritler). Calisirken: ros2 param set /fused_map thin_free_cleanup false
+        self.thin_free_cleanup = bool(p('thin_free_cleanup', True).value)
+        # Sisirme bilinmeyen hucreye yalnizca oldurucu (100) yazar; gecilebilir maliyet (1..99) yazmaz.
+        # true (eski): golgenin icindeki sisirme halkasi gecilebilir olup golgeler arasinda serit olusturuyordu.
+        #   ros2 param set /fused_map inflate_unknown true   (eski davranis)
+        self.inflate_unknown = bool(p('inflate_unknown', False).value)
+        self.thin_free_min_width = int(p('thin_free_min_width', 3).value)
         rate = float(p('max_publish_rate', 30.0).value)
         self.min_period = 1.0 / rate if rate > 0 else 0.0
         lidar_topic = p('lidar_topic', '/lidar_map').value
@@ -152,6 +169,18 @@ class FusedMap(Node):
             if prm.name == 'lidar_shadow':
                 self.lidar_shadow = bool(prm.value)
                 self.get_logger().info(f'lidar_shadow = {self.lidar_shadow}')
+                continue
+            if prm.name == 'inflate_unknown':
+                self.inflate_unknown = bool(prm.value)
+                self.get_logger().info(f'inflate_unknown = {self.inflate_unknown}')
+                continue
+            if prm.name == 'thin_free_cleanup':
+                self.thin_free_cleanup = bool(prm.value)
+                self.get_logger().info(f'thin_free_cleanup = {self.thin_free_cleanup}')
+                continue
+            if prm.name == 'thin_free_min_width':
+                self.thin_free_min_width = int(prm.value)
+                self.get_logger().info(f'thin_free_min_width = {self.thin_free_min_width}')
                 continue
             if prm.name in ('lethal_radius_m', 'inflation_radius_m'):
                 if prm.value < 0:
@@ -249,7 +278,10 @@ class FusedMap(Node):
         grid = np.full(shape, UNKNOWN, np.int8)
         grid[free] = FREE
         grid[any_occ] = OCCUPIED
-        grid = inflate(grid, self.res, self.lethal_r, self.inflation_r, self.profile)
+        grid = inflate(grid, self.res, self.lethal_r, self.inflation_r, self.profile,
+                       unknown_cost=self.inflate_unknown)
+        if self.thin_free_cleanup:
+            grid = remove_thin_free(grid, self.thin_free_min_width)
 
         m = OccupancyGrid()
         m.header.stamp = stamp

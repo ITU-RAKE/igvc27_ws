@@ -18,7 +18,7 @@ add_custom_command(
 add_custom_target(chassis_mesh ALL DEPENDS ${CHASSIS_STL})
 
 install(
-  DIRECTORY urdf launch rviz worlds config models
+  DIRECTORY urdf launch rviz worlds config models meshes_cad
   DESTINATION share/${PROJECT_NAME}
 )
 

@@ -3,7 +3,9 @@
 
     <!-- ===================== MATERYAL / SURTUNME ===================== -->
     <gazebo reference="chassis">
-        <material>Gazebo/DarkGrey</material>
+        <!-- Beyaz: asfalttan ayirt edilsin. Kameralarda gorunen govde pikselleri serit sanilmaz:
+             surround_view araç modeliyle (kesik piramit + tekerlek) govdenin kapattigi yeri maskeler -->
+        <material>Gazebo/White</material>
     </gazebo>
 
     <gazebo reference="left_wheel">
