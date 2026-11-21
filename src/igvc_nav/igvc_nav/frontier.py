@@ -52,7 +52,7 @@ def plan(data, start, *, cost_threshold=99, cost_coeff=8.5, x_coeff=2.0, y_coeff
          goal_cost_coeff=5.0, detour_coeff=1.0, min_goal_dist=20,
          min_unknown_area=100, fallback_max_cost=50, use_frontier=True, frontier_radius=0,
          forward=(1.0, 0.0), escape_radius=0, trail_back=None, max_backtrack=np.inf,
-         standard_depth=0, depth_coeff=1.2, route_slack=20.0):
+         standard_depth=0, depth_coeff=1.2, route_slack=20.0, bias_target=None, bias_coeff=0.0):
     """
     data: HxW int8 occupancy (data[y, x]; -1 bilinmiyor, 0..100 maliyet); +x = ileri.
     start: (x, y) hucre. Mesafeler hucre cinsinden.
@@ -78,6 +78,10 @@ def plan(data, start, *, cost_threshold=99, cost_coeff=8.5, x_coeff=2.0, y_coeff
            hucreler elenir, dar alan manevrasi iz kapaliyla ayni), hicbiri yoksa None + blocked.
       info['trail'] = elenen frontier sayisi, info['backtrack'] = hedef eski izin uzerinde,
       info['backtrack_blocked'] = gidilebilir her yer max_backtrack'ten geride (planner durur).
+    bias_target / bias_coeff (waypoint YAKLASMA; varsayilan kapali -> sonuc birebir ayni): frontier aday
+      skorundan bias_coeff * (aday -> bias_target kus ucusu, hucre) dusulur. Serit/duba/cep/iz kurallari
+      aynen kalir; yalnizca esit derecede iyi adaylar arasinda hedefe yakin olan secilir. bias_target
+      (x, y) hucre koordinati, harita disinda olabilir. Fallback (en uzun yol) etkilenmez.
     standard_depth (katman, 0 = kapali): adim 6. info['standard'] = B kabul edildi (hedef B, yol
       Dijkstra'dan B'ye), info['route_goal'] = G (frontier hedefi, debug).
     """
@@ -170,6 +174,9 @@ def plan(data, start, *, cost_threshold=99, cost_coeff=8.5, x_coeff=2.0, y_coeff
         score = (fxc * x_coeff - np.abs(fyc) * y_coeff
                  - data.ravel()[cand].astype(np.float64) * goal_cost_coeff
                  - (geo.ravel()[cand] - euclid.ravel()[cand]) * detour_coeff)
+        if bias_target is not None and bias_coeff > 0:
+            bx, by = bias_target
+            score = score - bias_coeff * np.hypot(xs.ravel()[cand] - bx, ys.ravel()[cand] - by)
         best = cand[int(np.argmax(score))]
         if standard_depth > 0:
             b = standard_goal(data, passable, (sx, sy), (ux, uy), along, across, standard_depth,
@@ -395,3 +402,51 @@ def plan_to_target(data, start, target, *, next_target=None, cost_threshold=99, 
             path = path + path2[1:]
             goal = goal2
     return goal, lead + path, info
+
+
+# ------------------------------------------------------------------ waypoint YAKLASMA yardimcilari
+def open_arc_deg(data, start, forward, radius, cost_max=50, bin_deg=5.0):
+    """Robottan radius (hucre) uzakliktaki halkanin ON yarisinda (forward +-90 deg) robottan ulasilabilen,
+    gecilebilir ve ucuz (0 <= deger <= cost_max) hucrelerin kapladigi toplam aci [deg]. Serit icinde ~30-40 deg (serit
+    genisligi / radius), acik alanda ~180 deg: 'koridor yonlendirmiyor' sinyali."""
+    h, w = data.shape
+    sx, sy = start
+    ux, uy = forward
+    nrm = math.hypot(ux, uy) or 1.0
+    head = math.atan2(uy / nrm, ux / nrm)
+    # Yalnizca robottan engellere carpmadan ULASILABILEN hucreler: serit cizgilerinin disindaki bos
+    # asfalt (kamera bos gorur) halkaya girip seriti 'acik alan' gostermesin.
+    cheap = ((data >= 0) & (data <= cost_max)).astype(np.uint8)
+    if not (0 <= sx < w and 0 <= sy < h) or not cheap[sy, sx]:
+        return 0.0
+    _, lab = cv2.connectedComponents(cheap, connectivity=4)
+    mine = lab == lab[sy, sx]
+    angs = np.radians(np.arange(-90.0, 90.0 + 1e-9, bin_deg / 4.0))
+    ok = np.zeros(len(angs), bool)
+    for k, a in enumerate(angs):
+        x = int(round(sx + radius * math.cos(head + a)))
+        y = int(round(sy + radius * math.sin(head + a)))
+        if 0 <= x < w and 0 <= y < h:
+            ok[k] = mine[y, x]
+    return float(ok.sum()) * bin_deg / 4.0
+
+
+def ray_clear(data, start, target, max_len, cost_max=50):
+    """start'tan target yonunde (hucre koordinatlari) max_len hucre boyunca butun hucreler gecilebilir ve
+    ucuz (0 <= deger <= cost_max) mi. Hedef daha yakinsa hedefe kadar."""
+    h, w = data.shape
+    sx, sy = start
+    tx, ty = target
+    d = math.hypot(tx - sx, ty - sy)
+    if d < 1e-6:
+        return True
+    n = int(math.ceil(min(d, max_len)))
+    for k in range(1, n + 1):
+        x = int(round(sx + (tx - sx) * k / d))
+        y = int(round(sy + (ty - sy) * k / d))
+        if not (0 <= x < w and 0 <= y < h):
+            return False
+        v = int(data[y, x])
+        if not 0 <= v <= cost_max:
+            return False
+    return True

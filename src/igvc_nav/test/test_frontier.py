@@ -253,3 +253,42 @@ def test_standard_not_used_in_fallback():
     goal, path, info = plan(g, (C, C), standard_depth=70)
     if i0['fallback']:
         assert not info['standard'] and goal == goal0
+
+
+# ---------------------------------------------------------------- waypoint YAKLASMA: egilim + acik alan
+from igvc_nav.frontier import open_arc_deg, ray_clear  # noqa: E402
+
+
+def fork_world():
+    """Serit 3 m ileride ikiye catallaniyor (sol ve sag kol), ortada bolme."""
+    return world([(0, 88, 180, 90), (0, 150, 180, 152),              # serit
+                  (180, 30, 182, 88), (180, 152, 182, 210),           # catal agzi duvarlari yok: acik
+                  (185, 115, 239, 125)])                              # ortadaki bolme
+
+
+def test_bias_none_is_unchanged():
+    g = fork_world()
+    a = plan(g, (C, C), frontier_radius=R - 2)
+    b = plan(g, (C, C), frontier_radius=R - 2, bias_target=None, bias_coeff=1.0)
+    c = plan(g, (C, C), frontier_radius=R - 2, bias_target=(C + 150, C + 80), bias_coeff=0.0)
+    assert a[0] == b[0] == c[0] and a[1] == b[1] == c[1]
+
+
+def test_bias_picks_side_toward_target():
+    g = fork_world()
+    left, _, _ = plan(g, (C, C), frontier_radius=R - 2, bias_target=(C + 150, C + 120), bias_coeff=1.0)
+    right, _, _ = plan(g, (C, C), frontier_radius=R - 2, bias_target=(C + 150, C - 120), bias_coeff=1.0)
+    assert left[1] > C and right[1] < C                               # hedef hangi yandaysa o kol
+
+
+def test_open_arc_lane_vs_open_field():
+    lane = world([(0, 88, 239, 90), (0, 150, 239, 152)])
+    field = world([])
+    assert open_arc_deg(lane, (C, C), (1, 0), R - 4) < 60
+    assert open_arc_deg(field, (C, C), (1, 0), R - 4) > 170
+
+
+def test_ray_clear():
+    g = world([(150, 100, 156, 140)])                                 # 1.5 m ileride duvar
+    assert not ray_clear(g, (C, C), (C + 90, C), 90)
+    assert ray_clear(g, (C, C), (C, C + 90), 90)                     # sola dogru bos

@@ -226,3 +226,118 @@ def test_clock_reset_does_not_break_activation():
     drive(m, line((33.06, 14.0), (33.06, 12.0)), SOUTH, t0=100.0)
     ev, _ = drive(m, line((33.06, 11.0), (33.06, 10.0)), SOUTH, t0=0.0)   # saat geri gitti
     assert m.state == W.ACTIVE
+
+
+# ------------------------------------------------------------------ ikinci tur (rearm)
+def one_pass(m, t0=0.0):
+    """Kuzeyden girip uc waypoint'i gecen ve No Man's Land'den guneye cikan rota."""
+    route = (line((33.06, 12.0), PTS[0]) + line(PTS[0], PTS[1])[1:] + line(PTS[1], PTS[2])[1:]
+             + line(PTS[2], (33.0, -8.0))[1:])
+    return drive(m, route, SOUTH, t0=t0, dt=0.05)
+
+
+def loop_back(m, t0):
+    """No Man's Land'den uzaklasip parkuru dolasir (guney -> bati -> kuzey -> dogu), girise doner."""
+    route = (line((33.0, -8.0), (33.0, -13.0)) + line((33.0, -13.0), (0.0, -13.0))[1:]
+             + line((0.0, -13.0), (0.0, 13.0))[1:] + line((0.0, 13.0), (33.06, 13.0))[1:])
+    ev, t = [], t0
+    for (x0, y0), (x1, y1) in zip(route, route[1:]):
+        ev += m.update(x1, y1, math.atan2(y1 - y0, x1 - x0), t)
+        t += 0.05
+    return ev, t
+
+
+def test_rearm_off_stays_done_like_before():
+    m = W.WaypointManager(PTS, NAMES)                            # varsayilan: rearm kapali
+    _, t = one_pass(m)
+    assert m.state == W.DONE
+    ev, t = loop_back(m, t)
+    ev2, _ = one_pass(m, t)
+    assert m.state == W.DONE and m.laps == 1 and 'yeniden' not in [k for k, _ in ev + ev2]
+
+
+def test_rearm_second_lap_activates_again():
+    m = W.WaypointManager(PTS, NAMES, rearm=True, rearm_travel_m=30.0, rearm_dist_m=10.0)
+    ev, t = one_pass(m)
+    assert m.state == W.DONE and m.laps == 1
+    ev, t = loop_back(m, t)
+    assert [k for k, _ in ev].count('yeniden') == 1 and m.state == W.STANDBY
+    assert m.lap_logs and [r for _, _, r in m.lap_logs[0]] == ['varildi'] * 3 and m.log == []
+    ev, _ = one_pass(m, t)
+    kinds = [k for k, _ in ev]
+    assert kinds.count('aktif') == 1 and kinds.count('varildi') == 3 and m.state == W.DONE and m.laps == 2
+    assert m.order == [0, 1, 2]                                  # ikinci turda da duz sira
+
+
+def test_rearm_needs_distance_not_just_travel():
+    """Yeterince yol gidilse de waypoint'lerin yakininda kalinirsa (geri donus) yeniden kurulmaz."""
+    m = W.WaypointManager(PTS, NAMES, rearm=True, rearm_travel_m=30.0, rearm_dist_m=10.0)
+    _, t = one_pass(m)
+    back_and_forth = (line((33.0, -8.0), (33.0, -10.0)) + line((33.0, -10.0), (33.0, -8.0))[1:]) * 10  # 40 m, son waypoint'e <= 8.7 m
+    ev, _ = drive(m, back_and_forth, SOUTH, t0=t, dt=0.05)
+    assert m.state == W.DONE and 'yeniden' not in [k for k, _ in ev]
+
+
+def test_rearm_respects_max_laps():
+    m = W.WaypointManager(PTS, NAMES, rearm=True, max_laps=1)
+    _, t = one_pass(m)
+    ev, _ = loop_back(m, t)
+    assert m.state == W.DONE and 'yeniden' not in [k for k, _ in ev]
+    assert 'tur=1/1' in m.status()
+
+
+def test_reset_clears_laps():
+    m = W.WaypointManager(PTS, NAMES, rearm=True)
+    _, t = one_pass(m)
+    loop_back(m, t)
+    m.reset()
+    assert m.laps == 0 and m.lap_logs == [] and m.state == W.STANDBY
+
+
+# ------------------------------------------------------------------ uzaktan yonelme (YAKLASMA)
+def test_approach_off_unchanged():
+    m = W.WaypointManager(PTS, NAMES)                            # varsayilan kapali
+    ev, _ = drive(m, line((33.06, 25.0), (33.06, 12.0)), SOUTH)
+    assert m.state == W.STANDBY and ev == [] and m.approach_target() is None
+
+
+def test_approach_enters_at_20m_then_activates():
+    m = W.WaypointManager(PTS, NAMES, approach=True, approach_m=20.0)
+    ev, t = drive(m, line((33.06, 30.0), (33.06, 26.5)), SOUTH)   # 19.5 m, giris onde
+    assert m.state == W.APPROACH and m.approach_target() == PTS[0] and [k for k, _ in ev] == ['yaklasma']
+    ev, _ = drive(m, line((33.06, 26.5), (33.06, 10.0))[1:], SOUTH, t0=t)
+    assert m.state == W.ACTIVE and m.order == [0, 1, 2] and 'aktif' in [k for k, _ in ev]
+
+
+def test_approach_requires_entry_ahead():
+    m = W.WaypointManager(PTS, NAMES, approach=True)
+    ev, _ = drive(m, line((33.06, 20.0), (33.06, 22.0)), math.pi / 2)   # giris arkada, uzaklasiyor
+    assert m.state == W.STANDBY and ev == []
+
+
+def test_approach_released_out_of_range():
+    m = W.WaypointManager(PTS, NAMES, approach=True, approach_m=20.0, approach_hyst_m=3.0)
+    _, t = drive(m, line((33.06, 26.0), (33.06, 25.0)), SOUTH)
+    assert m.state == W.APPROACH
+    ev, _ = drive(m, line((33.06, 25.0), (33.06, 32.0))[1:], SOUTH, t0=t)   # geri gidiyor (yon guneyde kalsa da)
+    assert m.state == W.STANDBY and 'yaklasma_iptal' in [k for k, _ in ev]
+
+
+def test_approach_no_progress_timeout_and_cooldown():
+    m = W.WaypointManager(PTS, NAMES, approach=True, approach_timeout_s=20.0, approach_cooldown_s=30.0)
+    _, t = drive(m, line((33.06, 22.0), (33.06, 21.0)), SOUTH)
+    assert m.state == W.APPROACH
+    stuck = [(33.06, 21.0)] * 250                                 # 25 s ayni yerde (duvara yaslanmis)
+    ev, t = drive(m, stuck, SOUTH, t0=t)
+    assert m.state == W.STANDBY and 'yaklasma_iptal' in [k for k, _ in ev]
+    ev, t = drive(m, [(33.06, 21.0)] * 100, SOUTH, t0=t)          # 10 s: bekleme suresinde girilmez
+    assert m.state == W.STANDBY and 'yaklasma' not in [k for k, _ in ev]
+    ev, _ = drive(m, line((33.06, 21.0), (33.06, 19.0)), SOUTH, t0=t + 25.0)   # sure doldu
+    assert m.state == W.APPROACH
+
+
+def test_approach_reverse_entry_and_rearm_lap():
+    m = W.WaypointManager(PTS, NAMES, approach=True, rearm=True)
+    ev, t = drive(m, line((33.0, -19.0), (33.0, -3.5)), math.pi / 2)    # guneyden kuzeye
+    kinds = [k for k, _ in ev]
+    assert kinds[0] == 'yaklasma' and 'aktif' in kinds and m.order == [2, 1, 0]

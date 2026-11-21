@@ -21,6 +21,8 @@ def generate_launch_description():
     sim_time = LaunchConfiguration('use_sim_time')
     std = LaunchConfiguration('standart_mode')
     wpm = LaunchConfiguration('waypoint_mode')
+    wpr = LaunchConfiguration('waypoint_rearm')
+    wpa = LaunchConfiguration('waypoint_approach')
     return LaunchDescription([
         DeclareLaunchArgument('use_sim_time', default_value='true',
                               description='Simulasyon saati (gercek aracta false)'),
@@ -28,10 +30,15 @@ def generate_launch_description():
                               description='Standart nav modu: planner + tracker birlikte (iz/frontier korunur)'),
         DeclareLaunchArgument('waypoint_mode', default_value='true',
                               description='GPS waypoint takibi (config/waypoints.yaml)'),
+        DeclareLaunchArgument('waypoint_rearm', default_value='true',
+                              description='Ikinci tur: waypoint\'ler bitince uzaklasinca yeniden BEKLEME'),
+        DeclareLaunchArgument('waypoint_approach', default_value='true',
+                              description='Uzaktan yonelme: giris waypoint\'i 20 m icinde iken ona yonel'),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(os.path.join(nav, 'path_planner.launch.py')),
             launch_arguments={'with_maps': 'false', 'use_sim_time': sim_time, 'standart_mode': std,
-                              'waypoint_mode': wpm}.items()),
+                              'waypoint_mode': wpm, 'waypoint_rearm': wpr,
+                              'waypoint_approach': wpa}.items()),
         Node(package='igvc_nav', executable='path_tracker', name='path_tracker',
              output='screen', parameters=[os.path.join(get_package_share_directory('igvc_nav'), 'config', 'path_tracker.yaml'),
                          {'use_sim_time': sim_time, 'standart_mode': std}]),

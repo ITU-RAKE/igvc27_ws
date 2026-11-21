@@ -15,7 +15,17 @@ Durumlar:
            Zaman asimi (timeout_s): atlanir. Son waypoint gecilince/atlaninca BITTI.
   BITTI    Standart surus. Ilk exit_hint_m boyunca "ileri" yonu son iki waypoint'in gidis yonu
            (cizgisiz No Man's Land'de burun yana bakarken yanlis yone frontier secilmesin).
-           Kosu boyunca bir daha AKTIF olunmaz (reset() ile yeniden baslar).
+           rearm=False (varsayilan): kosu boyunca bir daha AKTIF olunmaz (reset() ile yeniden baslar).
+           rearm=True: BITTI'den beri en az rearm_travel_m yol gidilmis VE arac butun waypoint'lere
+           rearm_dist_m'den uzaksa yeniden BEKLEME (ikinci tur). Iki sart birden: yalnizca mesafe, son
+           waypoint'ten cikarken geri donuste erken tetiklenir; yalnizca yol, kisa parkurda erken tetiklenir.
+           max_laps > 0 ise o kadar tamamlanan geciste durur (0 = sinirsiz). Yeni turda yon yine giris
+           ucuna gore secilir; iki uc neredeyse esit uzaksa onceki turun yonu tercih edilir.
+  YAKLASMA (approach=True; varsayilan kapali): BEKLEME'de giris waypoint'i approach_m'den yakin ve
+           aracin onunde (+-approach_fov_deg) ise. Planner "nereye" kararina waypoint yonunu ekler (bkz.
+           path_planner); activation_m'de AKTIF olunur (yon tespiti ayni). approach_m + approach_hyst_m'den
+           uzaklasinca ya da approach_timeout_s boyunca approach_progress_m yaklasamazsa BEKLEME'ye donulur;
+           ilerleme yokken donuldugunde approach_cooldown_s boyunca tekrar YAKLASMA'ya girilmez.
 """
 import math
 import os
@@ -23,7 +33,7 @@ from collections import deque
 
 import yaml
 
-STANDBY, ACTIVE, DONE = 'BEKLEME', 'AKTIF', 'BITTI'
+STANDBY, ACTIVE, DONE, APPROACH = 'BEKLEME', 'AKTIF', 'BITTI', 'YAKLASMA'
 
 
 class WaypointFileError(ValueError):
@@ -82,7 +92,9 @@ class WaypointManager:
     def __init__(self, points, names=None, *, reach_radius=1.0, reach_margin=0.3, activation=4.5,
                  activation_fov_deg=100.0, approach_window_s=1.0, approach_min_m=0.05,
                  timeout_s=40.0, retries=1, miss_near=2.0, miss_away=1.5, exit_hint_m=4.0,
-                 jump_m=2.0):
+                 jump_m=2.0, rearm=False, rearm_travel_m=30.0, rearm_dist_m=10.0, max_laps=0,
+                 approach=False, approach_m=20.0, approach_fov_deg=90.0, approach_hyst_m=3.0,
+                 approach_timeout_s=20.0, approach_progress_m=1.0, approach_cooldown_s=30.0):
         if not points:
             raise ValueError('waypoint listesi bos')
         self.points = [(float(x), float(y)) for x, y in points]
@@ -98,10 +110,29 @@ class WaypointManager:
         self.miss_away = miss_away
         self.exit_hint_m = exit_hint_m
         self.jump_m = jump_m
+        self.rearm = bool(rearm)
+        self.rearm_travel_m = rearm_travel_m
+        self.rearm_dist_m = rearm_dist_m
+        self.max_laps = int(max_laps)
+        self.approach = bool(approach)
+        self.approach_m = approach_m
+        self.approach_fov_deg = approach_fov_deg
+        self.approach_hyst_m = approach_hyst_m
+        self.approach_timeout_s = approach_timeout_s
+        self.approach_progress_m = approach_progress_m
+        self.approach_cooldown_s = approach_cooldown_s
         self.reset()
 
     # ------------------------------------------------------------------ durum
     def reset(self):
+        """Tam sifirlama (waypoint_mode acilinca): tur sayaci ve gecmis de sifirlanir."""
+        self.laps = 0                    # tamamlanan gecis (tur) sayisi
+        self.lap_logs = []               # onceki turlarin log'lari
+        self.prev_rev = None             # onceki turun yonu (True = ters)
+        self._new_lap()
+
+    def _new_lap(self):
+        """Tur basi: tur sayaci / gecmis korunur, gecis durumu sifirlanir."""
         self.state = STANDBY
         self.order = list(range(len(self.points)))
         self.i = 0                       # order icindeki konum
@@ -113,6 +144,10 @@ class WaypointManager:
         self.exit_dir = None             # BITTI: map'te birim vektor
         self.exit_travel = 0.0
         self.log = []                    # [(t, ad, sonuc)] varildi / atlandi
+        self.app_entry = None            # YAKLASMA: giris waypoint indeksi
+        self.app_best = math.inf         # YAKLASMA: girise en yakin mesafe
+        self.app_t = None                # YAKLASMA: son ilerleme zamani
+        self.app_cooldown_until = None   # ilerleme yokken birakildiysa: bu zamana kadar girilmez
 
     @property
     def n(self):
@@ -120,6 +155,14 @@ class WaypointManager:
 
     def target_index(self):
         return self.order[self.i] if self.state == ACTIVE and self.i < self.n else None
+
+    def approach_index(self):
+        return self.app_entry if self.state == APPROACH else None
+
+    def approach_target(self):
+        """YAKLASMA'da giris waypoint'i (map), degilse None."""
+        k = self.approach_index()
+        return None if k is None else self.points[k]
 
     def target(self):
         k = self.target_index()
@@ -159,6 +202,8 @@ class WaypointManager:
             self.last = None
             if self.t_start is not None:
                 self.t_start = t
+            self.app_t, self.app_best, self.app_cooldown_until = (t if self.app_t is not None else None,
+                                                                  math.inf, None)
         if self.last is not None:
             lx, ly, lt = self.last
             step = math.hypot(x - lx, y - ly)
@@ -170,6 +215,8 @@ class WaypointManager:
                 self.last = (x, y, t)
                 self.hist.clear()
                 self.d_min = math.inf
+                if self.state == APPROACH:
+                    self.app_best, self.app_t = math.inf, t
                 ev.append(('sicrama', f'global poz {step:.1f} m sicradi (lokalizasyon yeniden '
                                       f'kilitlendi): yeni konum esas aliniyor'))
                 return ev
@@ -177,16 +224,39 @@ class WaypointManager:
                 self.exit_travel += step
         self.last = (x, y, t)
 
-        if self.state == STANDBY:
+        if self.state in (STANDBY, APPROACH):
             ev += self._standby(x, y, yaw, t)
+            if self.state == APPROACH:
+                ev += self._approach(x, y, t)
         elif self.state == ACTIVE:
             ev += self._active(x, y, yaw, t)
+        elif self.state == DONE and self.rearm:
+            ev += self._done(x, y, t)
         return ev
+
+    def _done(self, x, y, t):
+        """BITTI -> BEKLEME (rearm): yeterince yol gidildi ve butun waypoint'lerden uzak."""
+        if self.max_laps > 0 and self.laps >= self.max_laps:
+            return []
+        if self.exit_travel < self.rearm_travel_m:
+            return []
+        d_min = min(math.hypot(px - x, py - y) for px, py in self.points)
+        if d_min <= self.rearm_dist_m:
+            return []
+        self.lap_logs.append(self.log)
+        travel = self.exit_travel
+        last = self.last
+        self._new_lap()
+        self.last = last                 # sicrama kontrolu kesintisiz surer
+        return [('yeniden', f'tur {self.laps} tamam ({travel:.0f} m yol, en yakin waypoint {d_min:.1f} m): '
+                            f'waypoint modu yeniden BEKLEME (tur {self.laps + 1})')]
 
     def _standby(self, x, y, yaw, t):
         d_first = math.hypot(self.points[0][0] - x, self.points[0][1] - y)
         d_last = math.hypot(self.points[-1][0] - x, self.points[-1][1] - y)
         rev = d_last < d_first
+        if self.prev_rev is not None and abs(d_last - d_first) < 1.0:
+            rev = self.prev_rev          # iki uc neredeyse esit uzak: onceki turun yonu
         entry = self.points[-1] if rev else self.points[0]
         d = min(d_first, d_last)
         self.hist.append((t, d))
@@ -195,6 +265,15 @@ class WaypointManager:
             self.hist.popleft()
         t0, d0 = self.hist[0]
         if d > self.activation:
+            if self.state == STANDBY and self.approach and d <= self.approach_m and \
+                    (self.app_cooldown_until is None or t >= self.app_cooldown_until):
+                bearing = math.atan2(entry[1] - y, entry[0] - x)
+                if abs(_wrap(bearing - yaw)) <= math.radians(self.approach_fov_deg):
+                    self.state = APPROACH
+                    self.app_entry = self.n - 1 if rev else 0
+                    self.app_best, self.app_t = d, t
+                    return [('yaklasma', f'YAKLASMA: giris {self.names[self.app_entry]} {d:.1f} m '
+                                         f'({"ters" if rev else "duz"} sira bekleniyor)')]
             return []
         bearing = math.atan2(entry[1] - y, entry[0] - x)
         ahead = abs(_wrap(bearing - yaw)) <= self.fov or d < self.reach
@@ -203,10 +282,31 @@ class WaypointManager:
             return []
         self.order = list(range(self.n))[::-1] if rev else list(range(self.n))
         self.state, self.i = ACTIVE, 0
+        self.app_entry, self.app_best, self.app_t = None, math.inf, None
         self._start_target(t)
         names = ' -> '.join(self.names[k] for k in self.order)
         return [('aktif', f'waypoint modu AKTIF ({"ters" if rev else "duz"} sira: {names}), '
                           f'giris {d:.1f} m')] + self._active(x, y, yaw, t)
+
+    def _approach(self, x, y, t):
+        """YAKLASMA: uzaklasma / ilerleme yok -> BEKLEME."""
+        px, py = self.points[self.app_entry]
+        d = math.hypot(px - x, py - y)
+        name = self.names[self.app_entry]
+        if d > self.approach_m + self.approach_hyst_m:
+            self._leave_approach()
+            return [('yaklasma_iptal', f'YAKLASMA birakildi: {name} {d:.1f} m (menzil disi), standart surus')]
+        if d < self.app_best - self.approach_progress_m:
+            self.app_best, self.app_t = d, t
+        elif self.app_t is not None and t - self.app_t > self.approach_timeout_s:
+            self._leave_approach()
+            self.app_cooldown_until = t + self.approach_cooldown_s
+            return [('yaklasma_iptal', f'YAKLASMA birakildi: {self.approach_timeout_s:.0f} s ilerleme yok '
+                                       f'({name} {d:.1f} m), {self.approach_cooldown_s:.0f} s standart surus')]
+        return []
+
+    def _leave_approach(self):
+        self.state, self.app_entry, self.app_best, self.app_t = STANDBY, None, math.inf, None
 
     def _start_target(self, t):
         self.attempts, self.d_min, self.t_start = 0, math.inf, t
@@ -217,6 +317,8 @@ class WaypointManager:
         self.i += 1
         if self.i >= self.n:
             self.state = DONE
+            self.laps += 1
+            self.prev_rev = self.order[0] != 0
             self.exit_dir, self.exit_travel = self.heading_out(), 0.0
             return [('bitti', 'tum waypoint\'ler tamamlandi, standart surus')]
         self._start_target(t)
@@ -248,10 +350,19 @@ class WaypointManager:
     def status(self, x=None, y=None):
         k = self.target_index()
         s = f'durum={self.state}'
+        if self.rearm:
+            s += f' tur={self.laps + (0 if self.state == DONE else 1)}'
+            if self.max_laps > 0:
+                s += f'/{self.max_laps}'
         if k is not None:
             s += f' hedef={self.names[k]} ({self.i + 1}/{self.n}) deneme={self.attempts}'
             if x is not None:
                 s += f' mesafe={self.distance(x, y):.2f}'
+        ka = self.approach_index()
+        if ka is not None:
+            s += f' giris={self.names[ka]}'
+            if x is not None:
+                s += f' mesafe={math.hypot(self.points[ka][0] - x, self.points[ka][1] - y):.1f}'
         if self.log:
             s += ' | ' + ', '.join(f'{n}:{r}' for _, n, r in self.log)
         return s
